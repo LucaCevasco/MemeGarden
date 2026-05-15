@@ -1,0 +1,26 @@
+# Default Meme Garden simulation parameters.
+# Values chosen so the SharerNorm meme has room to spread visibly within ~500 ticks.
+
+[world]
+width = 60
+height = 30
+
+[agents]
+count = 120
+starting_energy = 25.0
+metabolism = 0.4
+max_energy = 60.0
+
+[food]
+initial_density = 0.18
+regrowth_rate = 0.002
+energy_per_food = 9.0
+
+[meme]
+initial_carrier_fraction = 0.10
+transmissibility = 0.35
+share_threshold = 18.0
+share_amount = 5.0
+
+[run]
+seed = 42

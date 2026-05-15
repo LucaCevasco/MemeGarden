@@ -1,0 +1,22 @@
+[package]
+name = "meme-garden-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "CLI + TUI for the Meme Garden simulator."
+
+[[bin]]
+name = "meme-garden"
+path = "src/main.rs"
+
+[dependencies]
+meme-garden-core = { workspace = true }
+clap = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

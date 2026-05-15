@@ -1,0 +1,17 @@
+[package]
+name = "meme-garden-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Simulation engine for Meme Garden — agents, grid, memes, metrics."
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+rand = { workspace = true }
+rand_pcg = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
