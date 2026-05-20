@@ -10,8 +10,10 @@ description = "Simulation engine for Meme Garden — agents, grid, memes, metric
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
 rand = { workspace = true }
 rand_pcg = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+smallvec = { workspace = true }

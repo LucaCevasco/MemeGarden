@@ -8,3 +8,5 @@ Cargo.lock.bak
 .env
 .env.local
 .claude/
+/runs/*
+!/runs/.gitkeep

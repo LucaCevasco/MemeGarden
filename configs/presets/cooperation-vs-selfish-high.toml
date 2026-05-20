@@ -1,4 +1,4 @@
-# description: Default Meme Garden — small grid, mild scarcity, six starter memes seeded.
+# description: Cooperative meme vs aggressive meme, high scarcity (food sparse).
 
 [world]
 width = 60
@@ -14,12 +14,12 @@ initial_traits_dist = [0.35, 0.20, 0.20, 0.25]
 trait_mutation_rate = 0.01
 
 [food]
-initial_density = 0.18
-regrowth_rate = 0.002
+initial_density = 0.22
+regrowth_rate = 0.004
 energy_per_food = 9.0
 
 [scarcity]
-level = "custom"
+level = "high"
 
 [cognition]
 inventory_cap = 8
@@ -51,7 +51,11 @@ share_amount = 2.0
 
 [[memes.seed]]
 name = "share_with_allies"
-carrier_fraction = 0.10
+carrier_fraction = 0.5
+
+[[memes.seed]]
+name = "attack_low_energy_outsiders"
+carrier_fraction = 0.5
 
 [run]
 seed = 42

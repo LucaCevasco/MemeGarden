@@ -10,7 +10,9 @@ pub struct SimRng {
 
 impl SimRng {
     pub fn from_seed(seed: u64) -> Self {
-        Self { inner: Pcg64Mcg::seed_from_u64(seed) }
+        Self {
+            inner: Pcg64Mcg::seed_from_u64(seed),
+        }
     }
 
     pub fn gen_bool(&mut self, p: f32) -> bool {
