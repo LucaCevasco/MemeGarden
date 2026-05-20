@@ -16,11 +16,11 @@ initial_density = 0.18
 regrowth_rate = 0.002
 energy_per_food = 9.0
 
-[meme]
+[meme] 
 initial_carrier_fraction = 0.10
-transmissibility = 0.35
-share_threshold = 18.0
-share_amount = 5.0
+transmissibility       = 0.45
+share_threshold        = 22.0
+share_amount           = 2.0
 
 [run]
 seed = 42

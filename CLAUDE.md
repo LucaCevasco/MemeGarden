@@ -47,3 +47,11 @@ Read [`docs/design.md`](docs/design.md). The MVP question we want to be able to 
 > Can a cooperative meme survive against a selfish meme under different levels of scarcity, mutation, and social copying?
 
 Today's POC proves the *transmission pipeline*. Everything else is scaffolding for that question.
+
+<!-- SPECKIT START -->
+For the current feature's technical context, project structure, contracts, and
+quickstart commands, read [`specs/001-meme-garden-mvp/plan.md`](specs/001-meme-garden-mvp/plan.md)
+and the artifacts next to it (`research.md`, `data-model.md`, `contracts/*`,
+`quickstart.md`). The constitution at `.specify/memory/constitution.md` is the
+binding rules layer above all of them.
+<!-- SPECKIT END -->
