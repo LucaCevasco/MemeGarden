@@ -7,3 +7,6 @@ Cargo.lock.bak
 .vscode/
 .env
 .env.local
+.claude/
+/runs/*
+!/runs/.gitkeep

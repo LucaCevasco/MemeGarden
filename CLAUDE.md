@@ -26,12 +26,28 @@ cargo run -p meme-garden-cli -- headless --seed 42 --ticks 500
 3. **Stable iteration order.** Agents are processed in `AgentId` order. Don't introduce `HashMap` iteration over agents in the hot path without sorting.
 4. **No real AI deps in core.** The `ai` module ships traits + a `NoopProvider` only. When a real provider is added later, it lives in a separate crate (`meme-garden-ai` or similar) that depends on `meme-garden-core` — never the other way around.
 
-## Where things will grow
+## Where things live now
 
-- **Symbolic meme grammar** lands in `meme-garden-core/src/meme.rs`. Today `MemeKind` is a one-variant enum; it'll become a `{ trigger, effect, target, strength, transmissibility, mutation_rate }` struct. Match exhaustively so the compiler flags every site that needs updating.
-- **Mutation + recombination** belong next to `Meme` itself, not scattered across `world.rs`. The meme phase in `world.rs` should call into `meme::transmit(&mut rng, source, recipient)`.
-- **AI providers** plug in behind `ai::MemeNamer` / `ai::RunAnalyst`. Add new providers in a new crate; `core` stays HTTP-free.
-- **Visualization** lives in `meme-garden-cli/src/tui.rs`. Adding a meme-phylogenetic-tree pane is a `Layout::vertical` split on the right sidebar.
+- **Symbolic meme grammar** is implemented in `meme-garden-core/src/meme.rs`
+  (the `Meme` struct + `Trigger` / `TargetSelector` / `Effect` / `MemeKind`
+  enums). Match exhaustively so the compiler flags every site when variants
+  are added. The grammar is documented in [`docs/meme-grammar.md`](docs/meme-grammar.md).
+- **Mutation + recombination** live in `meme-garden-core/src/mutation.rs`.
+  Operate only on the four fields documented in `data-model.md §invariants`
+  and only via `SimRng`.
+- **Per-tick policy resolution** is `meme-garden-core/src/policy.rs`. New
+  trigger/effect semantics land here.
+- **Starter memes** are in `meme-garden-core/src/starters.rs`. Add new starters
+  by registering them in `STARTERS` and `lookup`.
+- **AI providers** plug in behind `core::ai::MemeNamer` / `core::ai::ExperimentDesigner`
+  / `core::ai::RunAnalyst`. Real LLM providers ship in a new crate
+  (`meme-garden-ai`); `meme-garden-core` stays HTTP-free.
+- **Visualization** lives in `meme-garden-cli/src/tui.rs`. A meme-prevalence
+  side pane is already wired; the next pane (lineage tree) is a
+  `Layout::vertical` split on the right sidebar.
+- **Run artifacts** are written to `runs/<YYYYMMDD-HHMMSS>-<short-name>/`
+  by `meme-garden-cli/src/export.rs::RunWriter`. The simulation core never
+  writes to disk.
 
 ## Style
 
@@ -47,3 +63,11 @@ Read [`docs/design.md`](docs/design.md). The MVP question we want to be able to 
 > Can a cooperative meme survive against a selfish meme under different levels of scarcity, mutation, and social copying?
 
 Today's POC proves the *transmission pipeline*. Everything else is scaffolding for that question.
+
+<!-- SPECKIT START -->
+For the current feature's technical context, project structure, contracts, and
+quickstart commands, read [`specs/001-meme-garden-mvp/plan.md`](specs/001-meme-garden-mvp/plan.md)
+and the artifacts next to it (`research.md`, `data-model.md`, `contracts/*`,
+`quickstart.md`). The constitution at `.specify/memory/constitution.md` is the
+binding rules layer above all of them.
+<!-- SPECKIT END -->

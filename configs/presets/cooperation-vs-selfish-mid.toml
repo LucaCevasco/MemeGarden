@@ -1,0 +1,66 @@
+# description: Cooperative meme vs aggressive meme, mid scarcity (food moderate).
+
+[world]
+width = 60
+height = 30
+
+[agents]
+count = 120
+starting_energy = 25.0
+metabolism = 0.4
+max_energy = 60.0
+max_age = 800
+initial_traits_dist = [0.35, 0.20, 0.20, 0.25]
+trait_mutation_rate = 0.01
+
+[food]
+initial_density = 0.22
+regrowth_rate = 0.004
+energy_per_food = 9.0
+
+[scarcity]
+level = "mid"
+
+[cognition]
+inventory_cap = 8
+
+[transmission]
+base_rate = 0.45
+social_copying_bias_mean = 0.5
+social_copying_bias_std = 0.15
+prestige_boost = 0.10
+
+[mutation]
+strength_jitter_max = 0.10
+enum_swap_probability = 0.20
+
+[reproduction]
+energy_threshold = 40.0
+offspring_energy_cost = 15.0
+inherit_meme_prob = 0.5
+min_age = 50
+
+[attack]
+energy_cost_attacker = 3.0
+energy_steal = 5.0
+retaliation_chance = 0.5
+
+[sharing]
+share_threshold = 22.0
+share_amount = 2.0
+
+[[memes.seed]]
+name = "share_with_allies"
+carrier_fraction = 0.5
+
+[[memes.seed]]
+name = "attack_low_energy_outsiders"
+carrier_fraction = 0.5
+
+[run]
+seed = 42
+horizon = 1000
+stop_on_extinction = false
+cluster_snapshot_every = 50
+metrics_emit_every = 1
+survival_threshold = 0.05

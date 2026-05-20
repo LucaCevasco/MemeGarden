@@ -79,6 +79,11 @@ Later an LLM can generate human-readable names: internally `{ trigger: NearStran
 
 ## MVP scope (what the codebase is growing toward)
 
+**Status (2026-05-19):** the MVP described below is now implemented end-to-end.
+The executable plan lives in [`specs/001-meme-garden-mvp/`](../specs/001-meme-garden-mvp/),
+and the symbolic grammar is documented in [`docs/meme-grammar.md`](meme-grammar.md).
+Run the milestone via `cargo run -p meme-garden-cli -- headless --preset cooperation-vs-selfish-low --seed 42`.
+
 A grid world where agents survive, reproduce, interact locally, and transmit symbolic memes that modify behavior. **No LLM agents in the hot loop. No complex language. No civilization model.**
 
 Just: agents, food, energy, movement, reproduction, death, local interaction, meme transmission, meme mutation, metrics, visualization.

@@ -7,12 +7,14 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use meme_garden_core::MemeKind;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Wrap},
     Terminal,
 };
 
@@ -67,11 +69,17 @@ fn main_loop<B: ratatui::backend::Backend>(
 fn draw(f: &mut ratatui::Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(20), Constraint::Length(34)])
+        .constraints([Constraint::Min(20), Constraint::Length(46)])
         .split(f.area());
 
     draw_grid(f, chunks[0], app);
-    draw_sidebar(f, chunks[1], app);
+
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(18), Constraint::Min(8)])
+        .split(chunks[1]);
+    draw_sidebar(f, right[0], app);
+    draw_prevalence(f, right[1], app);
 }
 
 fn draw_grid(f: &mut ratatui::Frame, area: Rect, app: &App) {
@@ -82,13 +90,14 @@ fn draw_grid(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let w = app.sim.grid.width as usize;
     let h = app.sim.grid.height as usize;
 
-    // Build a per-cell render hint. Carrier > non-carrier > food > empty.
     #[derive(Clone, Copy)]
     enum CellRender {
         Empty,
         Food,
         Agent,
-        Carrier,
+        Cooperator,
+        Selfish,
+        Mixed,
     }
     let mut cells = vec![CellRender::Empty; w * h];
 
@@ -104,9 +113,23 @@ fn draw_grid(f: &mut ratatui::Frame, area: Rect, app: &App) {
             continue;
         }
         let idx = a.position.y as usize * w + a.position.x as usize;
-        let next = if a.meme.is_some() { CellRender::Carrier } else { CellRender::Agent };
+        let has_coop = a.has_kind(MemeKind::Cooperative);
+        let has_self = a.has_kind(MemeKind::Aggressive);
+        let next = if has_coop && has_self {
+            CellRender::Mixed
+        } else if has_coop {
+            CellRender::Cooperator
+        } else if has_self {
+            CellRender::Selfish
+        } else {
+            // Carrying neither cooperative nor aggressive memes (or none at all).
+            CellRender::Agent
+        };
         cells[idx] = match (cells[idx], next) {
-            (CellRender::Carrier, _) => CellRender::Carrier,
+            (CellRender::Cooperator, CellRender::Cooperator) => CellRender::Cooperator,
+            (CellRender::Selfish, CellRender::Selfish) => CellRender::Selfish,
+            (CellRender::Cooperator, CellRender::Selfish)
+            | (CellRender::Selfish, CellRender::Cooperator) => CellRender::Mixed,
             (_, n) => n,
         };
     }
@@ -123,11 +146,25 @@ fn draw_grid(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 CellRender::Food => ('.', Style::default().fg(Color::Green)),
                 CellRender::Agent => (
                     'a',
-                    Style::default().fg(Color::White).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::DIM),
                 ),
-                CellRender::Carrier => (
-                    'A',
-                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                CellRender::Cooperator => (
+                    'C',
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                CellRender::Selfish => (
+                    'S',
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                CellRender::Mixed => (
+                    'X',
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
                 ),
             };
             spans.push(Span::styled(ch.to_string(), style));
@@ -139,26 +176,35 @@ fn draw_grid(f: &mut ratatui::Frame, area: Rect, app: &App) {
 }
 
 fn draw_sidebar(f: &mut ratatui::Frame, area: Rect, app: &App) {
-    let block = Block::default().title(" meme garden ").borders(Borders::ALL);
+    let block = Block::default()
+        .title(" meme garden ")
+        .borders(Borders::ALL);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let m = app.last_metrics();
-    let (tick, alive, food, carriers, prev, energy) = match m {
+    let (tick, alive, food, meme_count, coop, agg, mean_e, mean_age, diversity, top1) = match m {
         Some(m) => (
             m.tick,
             m.alive,
             m.food_count,
-            m.meme_carriers,
-            m.meme_prevalence,
+            m.meme_count,
+            m.meme_prevalence_by_kind.cooperative,
+            m.meme_prevalence_by_kind.aggressive,
             m.mean_energy,
+            m.mean_age,
+            m.diversity_shannon,
+            m.dominance_top1_fraction,
         ),
-        None => (0, 0, 0, 0, 0.0, 0.0),
+        None => (0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
     };
 
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let dim = Style::default().add_modifier(Modifier::DIM);
-    let carrier = Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD);
+    let coop_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let sel_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
 
     let lines = vec![
         Line::from(vec![
@@ -174,16 +220,32 @@ fn draw_sidebar(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Span::styled(format!("{food}"), Style::default().fg(Color::Green)),
         ]),
         Line::from(vec![
-            Span::styled("carriers ", dim),
-            Span::styled(format!("{carriers}"), carrier),
+            Span::styled("memes    ", dim),
+            Span::styled(format!("{meme_count}"), bold),
         ]),
         Line::from(vec![
-            Span::styled("prev.    ", dim),
-            Span::styled(format!("{:.1}%", prev * 100.0), carrier),
+            Span::styled("coop %   ", dim),
+            Span::styled(format!("{:.1}%", coop * 100.0), coop_style),
+        ]),
+        Line::from(vec![
+            Span::styled("sel %    ", dim),
+            Span::styled(format!("{:.1}%", agg * 100.0), sel_style),
         ]),
         Line::from(vec![
             Span::styled("mean E   ", dim),
-            Span::styled(format!("{energy:.2}"), bold),
+            Span::styled(format!("{mean_e:.2}"), bold),
+        ]),
+        Line::from(vec![
+            Span::styled("mean age ", dim),
+            Span::styled(format!("{mean_age:.0}"), bold),
+        ]),
+        Line::from(vec![
+            Span::styled("diversity", dim),
+            Span::styled(format!(" {diversity:.3}"), bold),
+        ]),
+        Line::from(vec![
+            Span::styled("top1     ", dim),
+            Span::styled(format!("{:.1}%", top1 * 100.0), bold),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -194,27 +256,88 @@ fn draw_sidebar(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Span::styled("state    ", dim),
             Span::styled(if app.paused { "paused" } else { "running" }, bold),
         ]),
-        Line::from(""),
-        Line::from(Span::styled("legend", bold)),
-        Line::from(vec![
-            Span::styled("A ", carrier),
-            Span::raw("meme carrier"),
-        ]),
-        Line::from(vec![
-            Span::styled("a ", Style::default().add_modifier(Modifier::DIM)),
-            Span::raw("agent"),
-        ]),
-        Line::from(vec![
-            Span::styled(". ", Style::default().fg(Color::Green)),
-            Span::raw("food"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("keys", bold)),
-        Line::from("space  pause/run"),
-        Line::from("s      single step"),
-        Line::from("+ / -  speed"),
-        Line::from("q      quit"),
     ];
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_prevalence(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .title(" meme prevalence by kind ")
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.history.is_empty() {
+        return;
+    }
+
+    let n = app.history.len().min(512);
+    let start = app.history.len() - n;
+    let coop: Vec<(f64, f64)> = app.history[start..]
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            (
+                i as f64,
+                m.meme_prevalence_by_kind.cooperative as f64,
+            )
+        })
+        .collect();
+    let agg: Vec<(f64, f64)> = app.history[start..]
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            (
+                i as f64,
+                m.meme_prevalence_by_kind.aggressive as f64,
+            )
+        })
+        .collect();
+    let mutant: Vec<(f64, f64)> = app.history[start..]
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            (
+                i as f64,
+                m.meme_prevalence_by_kind.mutant as f64,
+            )
+        })
+        .collect();
+
+    let datasets = vec![
+        Dataset::default()
+            .name("coop")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Cyan))
+            .data(&coop),
+        Dataset::default()
+            .name("sel")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Red))
+            .data(&agg),
+        Dataset::default()
+            .name("mut")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Magenta))
+            .data(&mutant),
+    ];
+
+    let chart = Chart::new(datasets)
+        .x_axis(
+            Axis::default()
+                .title("tick (recent)")
+                .bounds([0.0, n as f64])
+                .style(Style::default().add_modifier(Modifier::DIM)),
+        )
+        .y_axis(
+            Axis::default()
+                .title("prev")
+                .bounds([0.0, 1.0])
+                .style(Style::default().add_modifier(Modifier::DIM)),
+        );
+    f.render_widget(chart, inner);
 }
