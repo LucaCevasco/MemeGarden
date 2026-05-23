@@ -51,11 +51,11 @@ share_amount = 2.0
 
 [[memes.seed]]
 name = "share_with_allies"
-carrier_fraction = 0.5
+carrier_fraction = 0.3
 
 [[memes.seed]]
 name = "attack_low_energy_outsiders"
-carrier_fraction = 0.5
+carrier_fraction = 0.3
 
 [run]
 seed = 42

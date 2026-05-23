@@ -121,27 +121,43 @@ impl Simulation {
             agents.push(a);
         }
 
-        // Seed memes: for each pool entry, give that fraction of agents a copy of
-        // that starter meme. Multiple pool entries may target overlapping
-        // populations.
-        for entry in config.memes.seed.clone().iter() {
+        // Seed memes: each agent gets AT MOST ONE starter at t=0, sampled
+        // categorically from the pool. Per-entry `carrier_fraction` is the
+        // per-agent probability of getting that starter. If the entries sum
+        // to S ≤ 1.0, the remaining (1 - S) is the probability of starting
+        // with no meme — leaving room for transmission to do work. If S > 1.0
+        // the weights are normalized (the pool becomes "always pick one").
+        // why: with the previous independent-rolls model, overlapping pools
+        // (e.g. two starters at 0.5) gave ~25% of agents both memes from
+        // tick 0, which masks contagion dynamics.
+        let entries: Vec<crate::config::SeedMemeEntry> = config.memes.seed.clone();
+        let total_weight: f32 = entries.iter().map(|e| e.carrier_fraction).sum();
+        let span = total_weight.max(1.0);
+        for a in agents.iter_mut() {
+            if entries.is_empty() {
+                continue;
+            }
+            let mut u = (rng.gen_u32() as f32 / u32::MAX as f32) * span;
+            let mut chosen: Option<&crate::config::SeedMemeEntry> = None;
+            for e in &entries {
+                if u < e.carrier_fraction {
+                    chosen = Some(e);
+                    break;
+                }
+                u -= e.carrier_fraction;
+            }
+            let Some(entry) = chosen else { continue };
             let Some(ctor) = starters::lookup(&entry.name) else {
                 continue;
             };
-            let proto = ctor();
-            let lin_id = *starter_lineage
+            let mut m = ctor();
+            m.id = MemeId(next_meme_id);
+            next_meme_id += 1;
+            m.lineage_id = *starter_lineage
                 .get(&entry.name)
                 .expect("starter lineage must exist");
-            for a in agents.iter_mut() {
-                if rng.gen_bool(entry.carrier_fraction) {
-                    let mut m = proto.clone();
-                    m.id = MemeId(next_meme_id);
-                    next_meme_id += 1;
-                    m.lineage_id = lin_id;
-                    if a.inventory.len() < config.cognition.inventory_cap as usize {
-                        a.inventory.push(m);
-                    }
-                }
+            if a.inventory.len() < config.cognition.inventory_cap as usize {
+                a.inventory.push(m);
             }
         }
 
@@ -1068,6 +1084,27 @@ mod tests {
                 survival_threshold: 0.05,
             },
         }
+    }
+
+    #[test]
+    fn initial_seeding_is_at_most_one_meme_per_agent() {
+        // Two starters at carrier_fraction 0.5 each used to give ~25% of
+        // agents BOTH memes from t=0 (independent rolls). Under categorical
+        // sampling each agent gets at most one starter at construction.
+        let cfg = test_config();
+        let sim = Simulation::new(cfg, Some(42));
+        for a in &sim.agents {
+            assert!(
+                a.inventory.len() <= 1,
+                "agent {:?} started with {} memes; expected ≤ 1",
+                a.id,
+                a.inventory.len()
+            );
+        }
+        // And the seeding should actually seed *something* under the shipped
+        // 0.5 + 0.5 pool — otherwise the milestone has nothing to spread.
+        let carriers = sim.agents.iter().filter(|a| !a.inventory.is_empty()).count();
+        assert!(carriers > 0, "no agents seeded with any starter meme");
     }
 
     #[test]

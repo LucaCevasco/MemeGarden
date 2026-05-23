@@ -41,11 +41,11 @@ For the seed shipped with the project, the outcome shape is:
 
 | Scarcity | Population at horizon | Cooperative survives? | Aggressive survives? |
 |---|---|---|---|
-| low | ~50 | yes | yes |
-| mid | ~10 | yes | yes |
-| high | ~1 | yes | no |
+| low | ~60 | yes (100%) | yes (100%) |
+| mid | ~15 | yes (100%) | yes (100%) |
+| high | 0 | no — total collapse | no — total collapse |
 
-Under crushing scarcity, the aggressive meme goes extinct.
+Under abundant food, both strategies coexist. Squeeze food hard enough and the whole population dies before either meme "wins". The full event stream is in `runs/<id>/events.jsonl` for anyone who wants to ask the data different questions.
 
 ---
 
@@ -92,73 +92,61 @@ The project is two Rust crates. **Core is pure** — no terminal, no network, no
 
 ```mermaid
 flowchart LR
-    Config["configs/*.toml"] -- load --> CLI
-    CLI["meme-garden-cli<br/>main, runner, export, app, tui"] -- "(config, seed)" --> Core
-    Core["meme-garden-core<br/>Simulation, Agent, Meme,<br/>policy, mutation, lineage"] -- "Metrics + Events" --> CLI
-    CLI -- "events.jsonl<br/>summary.csv<br/>config.toml" --> Runs["runs/&lt;id&gt;/"]
-    CLI -- ratatui --> Term[(Terminal)]
-    Core -. trait .-> AI["MemeNamer<br/>ExperimentDesigner<br/>RunAnalyst<br/>(NoopProvider in MVP)"]
+    Cfg["configs/*.toml"]:::input
+    CLI["meme-garden-cli<br/><b>I/O + UI</b>"]:::impure
+    Core["meme-garden-core<br/><b>pure simulation</b>"]:::pure
+    Runs["runs/&lt;id&gt;/<br/>events · summary · config"]:::output
+    Term["Terminal UI<br/>(ratatui)"]:::output
 
-    classDef pure fill:#eef,stroke:#557;
-    classDef impure fill:#fee,stroke:#a55;
-    class Core pure;
-    class CLI,Runs,Term impure;
+    Cfg --> CLI
+    CLI -->|"config + seed"| Core
+    Core -->|"Metrics + Events"| CLI
+    CLI --> Runs
+    CLI --> Term
+
+    classDef pure fill:#2563eb,stroke:#1e3a8a,color:#fff,stroke-width:2px;
+    classDef impure fill:#ea580c,stroke:#9a3412,color:#fff,stroke-width:2px;
+    classDef input fill:#0891b2,stroke:#155e75,color:#fff,stroke-width:2px;
+    classDef output fill:#475569,stroke:#1e293b,color:#fff,stroke-width:2px;
 ```
+
+AI providers (`MemeNamer`, `ExperimentDesigner`, `RunAnalyst`) plug in behind traits in `core::ai` with a `NoopProvider` default. They're called only from CLI commands — never from the per-tick loop.
 
 One tick of the simulation is a fixed sequence of phases. Reordering them is a breaking change — the determinism gate fires immediately:
 
 ```mermaid
 flowchart TB
-    P1[Perception<br/><i>read-only neighborhood snapshot</i>]
-    P2[Policy<br/><i>traits + memes → weighted Action</i>]
-    P3[Action execution<br/><i>move, eat, share, attack, imitate</i>]
-    P4[Transmission<br/><i>roll per-meme, maybe mutate</i>]
-    P5[Reproduction<br/><i>inherit traits + memes, recombine</i>]
-    P6[Death<br/><i>metabolism + aging + cognitive cost</i>]
-    P7[World maintenance<br/><i>food regrowth</i>]
-    P8[Metrics emission<br/><i>Tick + Extinction + ClusterSnapshot</i>]
+    P1["1 · Perception<br/>look around"]:::life
+    P2["2 · Policy<br/>traits + memes → Action"]:::life
+    P3["3 · Action<br/>move · eat · share · attack"]:::life
+    P4["4 · Transmission<br/>spread · maybe mutate"]:::evo
+    P5["5 · Reproduction<br/>inherit · recombine"]:::evo
+    P6["6 · Death<br/>metabolism + aging"]:::life
+    P7["7 · World<br/>food regrowth"]:::life
+    P8["8 · Metrics<br/>emit Tick + Events"]:::out
     P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8
-    P8 -. "tick += 1" .-> P1
+    P8 -->|"tick += 1"| P1
+
+    classDef life fill:#3b82f6,stroke:#1e3a8a,color:#fff,stroke-width:2px;
+    classDef evo fill:#7c3aed,stroke:#4c1d95,color:#fff,stroke-width:2px;
+    classDef out fill:#059669,stroke:#064e3b,color:#fff,stroke-width:2px;
 ```
+
+Blue phases are the biological life-cycle. Purple phases are where memes evolve — spread, mutate, recombine. Green is the metrics gate, where one tick's outcome leaves the simulator.
 
 And the data inside the simulator — what an Agent and a Meme actually look like — is bounded and small:
 
 ```mermaid
-classDiagram
-    class Agent {
-      AgentId id
-      Position position
-      f32 energy
-      u32 age
-      bool alive
-      f32 social_copying_bias
-      Trait[] traits
-      Memory memory
-      TrustMap trust
-      Meme[] inventory
-    }
+flowchart LR
+    Agent["<b>Agent</b><br/>position · energy · age<br/>traits · memory · trust<br/>—<br/>inventory: [Meme]"]:::core
+    Meme["<b>Meme</b><br/>kind (cooperative / aggressive / …)<br/>trigger · target · effect<br/>strength · transmissibility<br/>mutation_rate · cognitive_cost"]:::core
+    Lineage["<b>LineageGraph</b><br/>append-only nodes<br/>every Meme traces back<br/>to a founding starter"]:::evo
 
-    class Meme {
-      MemeId id
-      LineageId lineage_id
-      MemeKind kind
-      Trigger trigger
-      TargetSelector target
-      Effect effect
-      f32 strength
-      f32 transmissibility
-      f32 mutation_rate
-      f32 cognitive_cost
-    }
+    Agent -->|"carries 0..N"| Meme
+    Meme -->|"lineage_id ↦ node"| Lineage
 
-    class LineageGraph {
-      LineageNode[] nodes
-      add(parents, tick, origin) LineageId
-      trace_to_starter(id) LineageId
-    }
-
-    Agent "1" o-- "0..n" Meme : inventory
-    Meme "n" --> "1" LineageGraph : lineage_id ↦ node
+    classDef core fill:#2563eb,stroke:#1e3a8a,color:#fff,stroke-width:2px;
+    classDef evo fill:#7c3aed,stroke:#4c1d95,color:#fff,stroke-width:2px;
 ```
 
 That's the whole mental model. Memes are inventory items. Inventory items bias behavior. Behavior changes who's adjacent to whom next tick, which changes who transmits what, which changes which memes survive.
@@ -267,7 +255,9 @@ A repeated table — one entry per seeded meme.
 | Param | Meaning |
 |---|---|
 | `name` | One of the six starters: `share_with_allies`, `avoid_strangers`, `copy_high_energy`, `attack_low_energy_outsiders`, `punish_non_sharers`, `prefer_same_meme`. |
-| `carrier_fraction` | Independent per-agent probability of receiving this starter. Two entries at `0.5` give ~25% of agents both, ~25% neither, ~50% exactly one. |
+| `carrier_fraction` | Per-agent probability of starting with this meme. |
+
+Each agent receives **at most one** starter at tick 0 — the pool is treated as a categorical draw. So two entries at `0.5` each give ~50% of agents the first meme, ~50% the second, and 0% none. If the entries sum to less than 1.0, the remaining probability is the chance of starting empty (which leaves transmission room to do work). If they sum to more than 1.0, the weights are normalized.
 
 ### `[run]` — execution control
 
