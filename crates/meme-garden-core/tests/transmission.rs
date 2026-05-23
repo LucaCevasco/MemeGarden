@@ -38,6 +38,7 @@ fn single_starter_cfg(starter: &str) -> SimConfig {
             strength_jitter_max: 0.0,
             enum_swap_probability: 0.0,
         },
+        conflict: ConflictConfig { recombine_share: 0.20 },
         reproduction: ReproductionConfig {
             energy_threshold: 50.0,
             offspring_energy_cost: 20.0,

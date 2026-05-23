@@ -34,6 +34,9 @@ prestige_boost = 0.10
 strength_jitter_max = 0.10
 enum_swap_probability = 0.20
 
+[conflict]
+recombine_share = 0.20
+
 [reproduction]
 energy_threshold = 40.0
 offspring_energy_cost = 15.0

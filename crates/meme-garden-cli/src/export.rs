@@ -132,7 +132,8 @@ pub fn validate_jsonl(run_dir: &Path) -> Result<()> {
             .ok_or_else(|| anyhow!("line {}: missing 'kind'", i + 1))?;
         match kind {
             "header" | "tick" | "birth" | "death" | "transmission" | "mutation"
-            | "recombination" | "meme_forgotten" | "extinction" | "cluster_snapshot" => {}
+            | "recombination" | "meme_forgotten" | "meme_replaced" | "extinction"
+            | "cluster_snapshot" => {}
             other => return Err(anyhow!("line {}: unknown event kind '{other}'", i + 1)),
         }
         n += 1;

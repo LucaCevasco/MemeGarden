@@ -45,6 +45,20 @@ impl MemeKind {
     }
 }
 
+/// Two meme kinds conflict when an agent can't sensibly carry both at once.
+/// Conflict drives the reject / replace / recombine outcome in `world::Simulation::try_acquire`.
+///
+/// MVP starts with one pair — Cooperative ↔ Aggressive — because that's the
+/// milestone question. Future kinds (Defensive ↔ Imitative, ...) extend the
+/// table below; the relation is symmetric so we cover both orderings.
+pub fn conflicts(a: MemeKind, b: MemeKind) -> bool {
+    use MemeKind::*;
+    matches!(
+        (a, b),
+        (Cooperative, Aggressive) | (Aggressive, Cooperative)
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Trigger {

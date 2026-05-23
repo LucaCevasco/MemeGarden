@@ -37,6 +37,7 @@ fn high_metabolism_cfg() -> SimConfig {
             strength_jitter_max: 0.0,
             enum_swap_probability: 0.0,
         },
+        conflict: ConflictConfig { recombine_share: 0.20 },
         reproduction: ReproductionConfig {
             energy_threshold: 100.0,
             offspring_energy_cost: 1.0,

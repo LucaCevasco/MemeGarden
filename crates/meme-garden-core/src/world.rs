@@ -52,6 +52,27 @@ impl Grid {
     }
 }
 
+/// Outcome of a single meme-acquisition attempt. Recombined / Replaced both
+/// result in inventory mutation; Rejected and Skipped leave inventory untouched.
+#[derive(Debug, Clone, Copy)]
+enum AcquireOutcome {
+    Accepted,
+    Skipped,
+    Rejected,
+    // why: fields are informational — used by tests/asserts and the JSONL
+    // event emission downstream. `dead_code` allow is intentional; do not
+    // collapse to unit variants.
+    #[allow(dead_code)]
+    Replaced {
+        old_meme_id: MemeId,
+        new_meme_id: MemeId,
+    },
+    Recombined {
+        parents: (MemeId, MemeId),
+        child_meme_id: MemeId,
+    },
+}
+
 #[derive(Debug)]
 pub struct Simulation {
     pub config: SimConfig,
@@ -185,6 +206,89 @@ impl Simulation {
 
     pub fn config(&self) -> &SimConfig {
         &self.config
+    }
+
+    /// Outcome of a meme acquisition attempt (transmission, imitation, inheritance).
+    /// Acquisition is the only path memes enter inventories, so conflict resolution
+    /// lives in `try_acquire` and nowhere else.
+    fn try_acquire(&mut self, agent_idx: usize, new_meme: crate::meme::Meme) -> AcquireOutcome {
+        // Already carry this exact kind? Same-direction same-kind memes don't
+        // duplicate (imitation already filters; this guards transmission too).
+        if self.agents[agent_idx]
+            .inventory
+            .iter()
+            .any(|m| m.kind == new_meme.kind)
+        {
+            return AcquireOutcome::Skipped;
+        }
+
+        // Find a conflicting existing meme.
+        let conflict_idx = self.agents[agent_idx]
+            .inventory
+            .iter()
+            .position(|m| crate::meme::conflicts(m.kind, new_meme.kind));
+
+        if let Some(j) = conflict_idx {
+            // Roll outcome. Strength weights the reject/replace split; the
+            // recombine slice is a fixed config knob carved off the top.
+            let old = self.agents[agent_idx].inventory[j].clone();
+            let p_recombine = self.config.conflict.recombine_share.clamp(0.0, 1.0);
+            let p_replace_of_remainder =
+                new_meme.strength / (old.strength + new_meme.strength).max(f32::EPSILON);
+            let r = self.rng.gen_u32() as f32 / u32::MAX as f32;
+            let p_replace = (1.0 - p_recombine) * p_replace_of_remainder;
+
+            if r < p_recombine {
+                let new_child_id = MemeId(self.next_meme_id);
+                self.next_meme_id += 1;
+                let child = crate::mutation::recombine(
+                    &old,
+                    &new_meme,
+                    new_child_id,
+                    &mut self.rng,
+                    &mut self.lineage,
+                    self.tick,
+                );
+                let child_id = child.id;
+                self.agents[agent_idx].inventory.remove(j);
+                self.agents[agent_idx].inventory.push(child);
+                AcquireOutcome::Recombined {
+                    parents: (old.id, new_meme.id),
+                    child_meme_id: child_id,
+                }
+            } else if r < p_recombine + p_replace {
+                let agent_id = self.agents[agent_idx].id;
+                self.agents[agent_idx].inventory.remove(j);
+                let new_id = new_meme.id;
+                self.agents[agent_idx].inventory.push(new_meme);
+                self.pending_events.push(Event::MemeReplaced {
+                    tick: self.tick,
+                    agent: agent_id,
+                    old: old.id,
+                    new: new_id,
+                });
+                AcquireOutcome::Replaced {
+                    old_meme_id: old.id,
+                    new_meme_id: new_id,
+                }
+            } else {
+                AcquireOutcome::Rejected
+            }
+        } else {
+            // No conflict → push, subject to inventory cap (FIFO eviction).
+            let cap = self.config.cognition.inventory_cap as usize;
+            if self.agents[agent_idx].inventory.len() >= cap {
+                let forgotten = self.agents[agent_idx].inventory.remove(0);
+                let aid = self.agents[agent_idx].id;
+                self.pending_events.push(Event::MemeForgotten {
+                    tick: self.tick,
+                    agent: aid,
+                    meme: forgotten.id,
+                });
+            }
+            self.agents[agent_idx].inventory.push(new_meme);
+            AcquireOutcome::Accepted
+        }
     }
 
     /// Advance the simulation by one tick. Returns the per-tick metrics snapshot.
@@ -422,8 +526,9 @@ impl Simulation {
                 Action::Imitate(target) => {
                     if let Some(j) = self.id_to_index(target) {
                         if self.agents[j].alive {
-                            // Imitation: adopt the first meme the target has that we don't.
-                            // Bounded by inventory_cap; oldest meme is evicted on overflow.
+                            // Pick the first meme on the target the imitator
+                            // doesn't already have by kind. `try_acquire` then
+                            // handles same-kind skip and conflict resolution.
                             let pick = self.agents[j]
                                 .inventory
                                 .iter()
@@ -435,7 +540,6 @@ impl Simulation {
                                 })
                                 .cloned();
                             if let Some(mut m) = pick {
-                                let i_id = self.agents[i].id;
                                 m.id = MemeId(self.next_meme_id);
                                 self.next_meme_id += 1;
                                 m.lineage_id = self.lineage.add(
@@ -443,18 +547,11 @@ impl Simulation {
                                     self.tick,
                                     LineageOrigin::Inheritance,
                                 );
-                                if self.agents[i].inventory.len() >= inventory_cap {
-                                    let forgotten = self.agents[i].inventory.remove(0);
-                                    self.pending_events.push(Event::MemeForgotten {
-                                        tick: self.tick,
-                                        agent: i_id,
-                                        meme: forgotten.id,
-                                    });
-                                }
-                                self.agents[i].inventory.push(m);
+                                let _ = self.try_acquire(i, m);
                             }
                         }
                     }
+                    let _ = inventory_cap; // suppress unused-binding warning
                 }
                 Action::Transmit(_, _) => {
                     // Transmission is the dedicated phase's responsibility; the
@@ -509,7 +606,8 @@ impl Simulation {
                 let _ = i_id;
 
                 for (j, _nid) in neighbors {
-                    // Skip if recipient already has this kind (prevents duplicates).
+                    // Same-kind dup is rejected later by try_acquire (Skipped);
+                    // we keep a fast path here to avoid wasting an RNG roll.
                     if self.agents[j].inventory.iter().any(|m| m.kind == meme.kind) {
                         continue;
                     }
@@ -525,7 +623,6 @@ impl Simulation {
                     let mut child = meme.clone();
                     child.id = MemeId(self.next_meme_id);
                     self.next_meme_id += 1;
-                    // Inherit lineage from parent.
                     child.lineage_id = self.lineage.add(
                         smallvec![meme.lineage_id],
                         self.tick,
@@ -541,7 +638,6 @@ impl Simulation {
                             &self.config.mutation,
                         );
                         if outcome.mutated {
-                            // Re-allocate a new id + lineage for the mutated child.
                             let new_id = MemeId(self.next_meme_id);
                             self.next_meme_id += 1;
                             let new_lin = self.lineage.add(
@@ -563,27 +659,39 @@ impl Simulation {
                         }
                     }
 
-                    // Apply inventory cap.
-                    if self.agents[j].inventory.len() >= inventory_cap {
-                        let forgotten = self.agents[j].inventory.remove(0);
-                        let jid = self.agents[j].id;
-                        self.pending_events.push(Event::MemeForgotten {
-                            tick: self.tick,
-                            agent: jid,
-                            meme: forgotten.id,
-                        });
-                    }
+                    // Acquire via shared helper — handles conflict resolution
+                    // (reject / replace / recombine) and inventory cap eviction.
                     let to_id = self.agents[j].id;
                     let new_meme_id = child.id;
-                    self.agents[j].inventory.push(child);
-                    self.pending_events.push(Event::Transmission {
-                        tick: self.tick,
-                        from: i_id,
-                        to: to_id,
-                        meme: new_meme_id,
-                    });
-                    transmissions += 1;
+                    let outcome = self.try_acquire(j, child);
+                    match outcome {
+                        AcquireOutcome::Accepted | AcquireOutcome::Replaced { .. } => {
+                            self.pending_events.push(Event::Transmission {
+                                tick: self.tick,
+                                from: i_id,
+                                to: to_id,
+                                meme: new_meme_id,
+                            });
+                            transmissions += 1;
+                        }
+                        AcquireOutcome::Recombined {
+                            parents,
+                            child_meme_id,
+                        } => {
+                            self.pending_events.push(Event::Recombination {
+                                tick: self.tick,
+                                parents,
+                                child_meme: child_meme_id,
+                            });
+                            // A recombination still counts as a contact event
+                            // — credit it to the transmission counter so the
+                            // metric reflects "cross-agent meme moves."
+                            transmissions += 1;
+                        }
+                        AcquireOutcome::Rejected | AcquireOutcome::Skipped => {}
+                    }
                 }
+                let _ = inventory_cap; // suppress unused-binding warning
             }
         }
         (transmissions, mutations)
@@ -679,12 +787,19 @@ impl Simulation {
             child.social_copying_bias =
                 (self.agents[i].social_copying_bias + self.agents[j].social_copying_bias) * 0.5;
 
-            // Inherit memes.
+            // Push child into agents BEFORE inheritance so try_acquire can
+            // operate on its index. This also lets conflict resolution kick in
+            // when parent A's meme and parent B's meme are opposites.
+            let child_idx = self.agents.len();
+            let parent_id = self.agents[i].id;
+            self.agents.push(child);
+
+            // Inherit memes via shared helper.
             let mut inherited_memes: Vec<MemeId> = Vec::new();
             for parent_idx in [i, j] {
                 let parent_inv = self.agents[parent_idx].inventory.clone();
                 for m in parent_inv {
-                    if self.rng.gen_bool(inherit_prob) && child.inventory.len() < inventory_cap {
+                    if self.rng.gen_bool(inherit_prob) {
                         let mut cm = m.clone();
                         cm.id = MemeId(self.next_meme_id);
                         self.next_meme_id += 1;
@@ -693,15 +808,34 @@ impl Simulation {
                             self.tick,
                             LineageOrigin::Inheritance,
                         );
-                        inherited_memes.push(cm.id);
-                        child.inventory.push(cm);
+                        let acquired_id = cm.id;
+                        let outcome = self.try_acquire(child_idx, cm);
+                        if matches!(
+                            outcome,
+                            AcquireOutcome::Accepted | AcquireOutcome::Replaced { .. }
+                        ) {
+                            inherited_memes.push(acquired_id);
+                        }
+                        if let AcquireOutcome::Recombined {
+                            parents,
+                            child_meme_id,
+                        } = outcome
+                        {
+                            self.pending_events.push(Event::Recombination {
+                                tick: self.tick,
+                                parents,
+                                child_meme: child_meme_id,
+                            });
+                            inherited_memes.push(child_meme_id);
+                        }
                     }
                 }
             }
-            // Optional recombination if both parents have at least one meme.
+            // Optional recombination if both parents have at least one meme
+            // and the offspring still has room.
             if !self.agents[i].inventory.is_empty()
                 && !self.agents[j].inventory.is_empty()
-                && child.inventory.len() < inventory_cap
+                && self.agents[child_idx].inventory.len() < inventory_cap
                 && self.rng.gen_bool(0.2)
             {
                 let a = self.agents[i].inventory[0].clone();
@@ -718,7 +852,7 @@ impl Simulation {
                 );
                 let rid = recombined.id;
                 inherited_memes.push(rid);
-                child.inventory.push(recombined);
+                self.agents[child_idx].inventory.push(recombined);
                 self.pending_events.push(Event::Recombination {
                     tick: self.tick,
                     parents: (a.id, b.id),
@@ -726,14 +860,13 @@ impl Simulation {
                 });
             }
 
-            let parent_id = self.agents[i].id;
             self.pending_events.push(Event::Birth {
                 tick: self.tick,
                 child: child_id,
                 parent: parent_id,
                 inherited: inherited_memes,
             });
-            self.agents.push(child);
+            // Child was already pushed into `self.agents` before inheritance.
             births += 1;
         }
 
@@ -1048,6 +1181,7 @@ mod tests {
                 strength_jitter_max: 0.1,
                 enum_swap_probability: 0.2,
             },
+            conflict: ConflictConfig { recombine_share: 0.20 },
             reproduction: ReproductionConfig {
                 energy_threshold: 35.0,
                 offspring_energy_cost: 10.0,

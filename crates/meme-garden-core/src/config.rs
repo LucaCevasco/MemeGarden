@@ -33,6 +33,8 @@ pub struct SimConfig {
     pub cognition: CognitionConfig,
     pub transmission: TransmissionConfig,
     pub mutation: MutationConfig,
+    #[serde(default = "ConflictConfig::default_value")]
+    pub conflict: ConflictConfig,
     pub reproduction: ReproductionConfig,
     pub attack: AttackConfig,
     pub sharing: SharingConfig,
@@ -94,6 +96,21 @@ pub struct TransmissionConfig {
 pub struct MutationConfig {
     pub strength_jitter_max: f32,
     pub enum_swap_probability: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictConfig {
+    /// Fraction of contested acquires that become a recombination of the two
+    /// conflicting memes instead of a straight reject/replace.
+    pub recombine_share: f32,
+}
+
+impl ConflictConfig {
+    pub(crate) fn default_value() -> Self {
+        Self {
+            recombine_share: 0.20,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,6 +237,7 @@ impl SimConfig {
             self.reproduction.inherit_meme_prob,
         )?;
         in_unit("attack.retaliation_chance", self.attack.retaliation_chance)?;
+        in_unit("conflict.recombine_share", self.conflict.recombine_share)?;
         in_unit(
             "agents.trait_mutation_rate",
             self.agents.trait_mutation_rate,
@@ -417,6 +435,7 @@ impl From<LegacySimConfig> for SimConfig {
                 strength_jitter_max: 0.10,
                 enum_swap_probability: 0.20,
             },
+            conflict: ConflictConfig::default_value(),
             reproduction: ReproductionConfig {
                 energy_threshold: 40.0,
                 offspring_energy_cost: 15.0,

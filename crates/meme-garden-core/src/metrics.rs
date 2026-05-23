@@ -216,6 +216,12 @@ pub enum Event {
         agent: AgentId,
         meme: MemeId,
     },
+    MemeReplaced {
+        tick: u64,
+        agent: AgentId,
+        old: MemeId,
+        new: MemeId,
+    },
     Extinction {
         tick: u64,
         #[serde(flatten)]
@@ -238,6 +244,7 @@ impl Event {
             Event::Mutation { .. } => "mutation",
             Event::Recombination { .. } => "recombination",
             Event::MemeForgotten { .. } => "meme_forgotten",
+            Event::MemeReplaced { .. } => "meme_replaced",
             Event::Extinction { .. } => "extinction",
             Event::ClusterSnapshot { .. } => "cluster_snapshot",
         }

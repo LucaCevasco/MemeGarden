@@ -37,6 +37,7 @@ fn cfg() -> SimConfig {
             strength_jitter_max: 0.20,
             enum_swap_probability: 0.5,
         },
+        conflict: ConflictConfig { recombine_share: 0.20 },
         reproduction: ReproductionConfig {
             energy_threshold: 100.0, // effectively disable repro
             offspring_energy_cost: 1.0,

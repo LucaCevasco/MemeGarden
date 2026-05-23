@@ -25,7 +25,7 @@ A controlled **memetic petri dish**. Little agents live on a grid. They eat, mov
 
 Pretend culture is biology. An "idea" is not flavor text — it's an **object** in the simulation, a tiny rule like *"when next to a hungry friend, share food."* That rule sits in an agent's inventory the way a gene sits in a cell. When the agent interacts with a neighbor, the rule can copy itself over to the neighbor with some probability. Sometimes it copies with a small change — a mutation. Sometimes two rules in the same agent combine into a new one. Over hundreds of ticks, the simulator gives you a frame-by-frame view of which rules spread, which die out, and which mutate into something unrecognizable.
 
-The interesting part is that the rules **affect the host's behavior**. Carrying *"share with allies"* makes you more likely to give energy away. Carrying *"attack low-energy outsiders"* makes you more likely to predate on weaker strangers. Carrying both makes you a confused creature. So the world is a tug-of-war: cooperators bleed energy by sharing, predators pay attack costs and risk retaliation, and the question of which kind of agent is fittest is *not* settled in advance — the simulator settles it for us, deterministically, given a seed.
+The interesting part is that the rules **affect the host's behavior**. Carrying *"share with allies"* makes you more likely to give energy away. Carrying *"attack low-energy outsiders"* makes you more likely to predate on weaker strangers. Conflicting rules can't quietly coexist in the same agent — when a contradictory new meme arrives, the carrier either rejects it, gets converted, or fuses the two into a hybrid child. So the world is a tug-of-war: cooperators bleed energy by sharing, predators pay attack costs and risk retaliation, and the question of which kind of agent is fittest is *not* settled in advance — the simulator settles it for us, deterministically, given a seed.
 
 We deliberately avoided giving agents natural language or LLM-generated thoughts. Memes are bounded symbolic structures — finite enums plus a few numbers — so the simulation is fast, debuggable, and reproducible to the byte. That matters: if you want to take conclusions out of this, you need to be able to re-run an experiment and get the same answer.
 
@@ -39,13 +39,13 @@ The MVP answers it end-to-end. Three shipped presets — `cooperation-vs-selfish
 
 For the seed shipped with the project, the outcome shape is:
 
-| Scarcity | Population at horizon | Cooperative survives? | Aggressive survives? |
+| Scarcity | Population at horizon | Cooperative | Aggressive |
 |---|---|---|---|
-| low | ~60 | yes (100%) | yes (100%) |
-| mid | ~15 | yes (100%) | yes (100%) |
-| high | 0 | no — total collapse | no — total collapse |
+| low | ~67 | **87%** | 13% |
+| mid | ~14 | **100%** | 0% (extinct) |
+| high | 0 | — (total collapse) | — (total collapse) |
 
-Under abundant food, both strategies coexist. Squeeze food hard enough and the whole population dies before either meme "wins". The full event stream is in `runs/<id>/events.jsonl` for anyone who wants to ask the data different questions.
+Under abundant food the cooperative meme outcompetes the aggressive one but doesn't push it out entirely. Squeeze food a bit and cooperative wins decisively — the aggressive meme goes extinct before horizon. Squeeze it hard and the whole population dies before either side settles anything. The full event stream is in `runs/<id>/events.jsonl` for anyone who wants to ask the data different questions.
 
 ---
 
@@ -60,7 +60,7 @@ The simulator runs the full life-cycle described above and writes everything to 
 - **A headless mode** that produces byte-identical output to the TUI for the same seed.
 - **A self-describing run artifact**: every run writes its resolved config, a JSON-Lines event stream, and a flat CSV summary, all under `runs/<timestamp>-<name>/`.
 
-The whole thing has **47 tests**, runs **1000 ticks in under a second** in release mode, and is **bit-identical** across reruns with the same seed. The constitution that keeps it that way lives at [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
+The whole thing has **51 tests**, runs **1000 ticks in under a second** in release mode, and is **bit-identical** across reruns with the same seed. The constitution that keeps it that way lives at [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
 
 ---
 
@@ -220,6 +220,16 @@ The roll for "does meme M move from A to B this tick" is `base_rate × meme.tran
 
 The per-meme `mutation_rate` gates *whether* mutation fires on a transmission; these knobs control *how big* the change is. Mutation preserves the meme's `kind`.
 
+### `[conflict]` — what happens when opposite memes meet
+
+Some memes can't sensibly coexist in the same agent — `Cooperative` and `Aggressive` are the first such pair. When transmission, imitation, or inheritance would deliver a conflicting meme to a carrier of its opposite, the simulator rolls one of three outcomes: **reject** (keep the old one), **replace** (drop the old, keep the new), or **recombine** (fuse both into a hybrid child meme, drop both originals).
+
+| Param | Meaning |
+|---|---|
+| `recombine_share` | Fraction of contested acquires that fuse the two memes via recombination. The remaining share splits between reject and replace, weighted by relative `strength` — stronger new memes win replace rolls more often. |
+
+Default is `0.20`. Set to `0` to disable fusing entirely (everything becomes reject-or-replace). Set high to bias toward hybridization.
+
 ### `[reproduction]` — making new agents
 
 | Param | Meaning |
@@ -278,6 +288,7 @@ Each agent receives **at most one** starter at tick 0 — the pool is treated as
 - **Maximize mutation drift.** Raise `mutation.strength_jitter_max` and `mutation.enum_swap_probability` toward 1.0.
 - **Pure deterministic baseline (no mutation, no trait drift).** Set `mutation.strength_jitter_max = 0`, `mutation.enum_swap_probability = 0`, `agents.trait_mutation_rate = 0`. Memes still spread but never change.
 - **Fast-forward a sweep.** Set `metrics_emit_every = 10`, `cluster_snapshot_every = 0`, raise `--ticks`. Same simulation, ~10× smaller `events.jsonl`.
+- **Bias conflict toward hybridization.** Raise `conflict.recombine_share` toward 1.0 — every contested acquire fuses the two memes into a recombined child instead of one displacing the other.
 - **Force a single-meme world.** Drop one `[[memes.seed]]` entry and bump the remaining one to `0.9+`. Useful for "does this meme spread on its own merits" tests.
 - **Test a meme's solo viability.** Seed only one starter at `carrier_fraction = 0.05`. Check whether it reaches `≥ run.survival_threshold` by horizon.
 - **Reproducibility sanity check.** Run twice with the same seed. The hash of `tail -n +2 events.jsonl` (i.e. everything after the run-id-bearing header) must match.
