@@ -1,52 +1,304 @@
 # Meme Garden
 
-A controlled **memetic petri dish** in Rust: tiny agents live on a grid, eat,
-move, share, attack, reproduce, and pass around symbolic memes that mutate,
-compete, and influence behavior. The long-term goal is a research toy for
-cultural evolution — does cooperation survive against selfishness under
-scarcity? do punishment norms stabilize cooperation? do honest signals beat
-deceptive ones? — but the project answers one question first.
+<p align="center">
+  <img src="docs/assets/meme-garden-demo.gif" alt="Meme Garden — live simulation" width="900" />
+</p>
 
-## North-star question (the MVP milestone)
+A controlled **memetic petri dish**. Little agents live on a grid. They eat, move, share food, attack each other, copy their neighbors, and reproduce. They also carry **ideas** — small symbolic memes — that spread between them, mutate as they spread, and shape how their carriers behave. The whole point is to watch ideas behave like life and ask whether one strategy beats another.
 
-> **Can a cooperative meme survive against a selfish meme under different
-> levels of scarcity, mutation, and social copying?**
+---
 
-The MVP answers this end-to-end. Three shipped presets run the experiment at
-`low`, `mid`, and `high` scarcity; the answer is read straight from the emitted
-metrics.
+## Index
 
-## What this iteration ships (MVP)
+1. [The idea](#the-idea)
+2. [The question we want to answer first](#the-question-we-want-to-answer-first)
+3. [What ships today](#what-ships-today)
+4. [Quick start](#quick-start)
+5. [Architecture at a glance](#architecture-at-a-glance)
+6. [Config reference](#config-reference)
+7. [Quick recipes](#quick-recipes)
+8. [Tech spec](#tech-spec) — the engineering deep-dive
 
-- **Deterministic, seedable tick loop.** Same `(config, seed)` → bit-identical
-  metrics stream. Verified by a regression test plus a milestone-direction test.
-- **Bounded symbolic memes** with `{trigger, target, effect, strength,
-  transmissibility, mutation_rate, cognitive_cost, lineage}`. No strings or LLM
-  calls anywhere in the tick loop. See [`docs/meme-grammar.md`](docs/meme-grammar.md).
-- **Six starter memes**: `share_with_allies`, `avoid_strangers`,
-  `copy_high_energy`, `attack_low_energy_outsiders`, `punish_non_sharers`,
-  `prefer_same_meme`.
-- **Bounded mutation + recombination** with full lineage tracking — every meme
-  alive at any tick traces back to a founding starter.
-- **Full agent life-cycle**: move, eat, share, attack, imitate, transmit,
-  reproduce, die (starvation, combat, aging).
-- **Traits + memory + trust map** per agent.
-- **Per-tick + per-event metrics** emitted as JSON-Lines, plus a flat per-tick
-  CSV summary. Tracks population, per-kind prevalence, transmission events,
-  mutation events, extinction, diversity (Shannon), dominance (top-1), and
-  Jaccard-based cultural clusters.
-- **Ratatui TUI** with world grid + meme-prevalence chart pane.
-- **Headless mode** producing identical artifacts to the TUI for the same seed.
-- **AI seams** (`MemeNamer`, `ExperimentDesigner`, `RunAnalyst`) behind traits
-  with a deterministic `NoopProvider`. Live LLM providers ship in a later
-  iteration.
-- **47 tests** pass: 13 core unit, 22 core integration, 12 CLI integration.
-- **Performance**: 1000-tick run on the default config completes in **~0.6s**
-  in release mode (vs the 30s budget).
+---
 
-The full spec lives in [`specs/001-meme-garden-mvp/`](specs/001-meme-garden-mvp/).
-The project constitution (binding rules) is at
-[`.specify/memory/constitution.md`](.specify/memory/constitution.md).
+## The idea
+
+Pretend culture is biology. An "idea" is not flavor text — it's an **object** in the simulation, a tiny rule like *"when next to a hungry friend, share food."* That rule sits in an agent's inventory the way a gene sits in a cell. When the agent interacts with a neighbor, the rule can copy itself over to the neighbor with some probability. Sometimes it copies with a small change — a mutation. Sometimes two rules in the same agent combine into a new one. Over hundreds of ticks, the simulator gives you a frame-by-frame view of which rules spread, which die out, and which mutate into something unrecognizable.
+
+The interesting part is that the rules **affect the host's behavior**. Carrying *"share with allies"* makes you more likely to give energy away. Carrying *"attack low-energy outsiders"* makes you more likely to predate on weaker strangers. Carrying both makes you a confused creature. So the world is a tug-of-war: cooperators bleed energy by sharing, predators pay attack costs and risk retaliation, and the question of which kind of agent is fittest is *not* settled in advance — the simulator settles it for us, deterministically, given a seed.
+
+We deliberately avoided giving agents natural language or LLM-generated thoughts. Memes are bounded symbolic structures — finite enums plus a few numbers — so the simulation is fast, debuggable, and reproducible to the byte. That matters: if you want to take conclusions out of this, you need to be able to re-run an experiment and get the same answer.
+
+---
+
+## The question we want to answer first
+
+> **Can a cooperative meme survive against a selfish meme under different levels of scarcity, mutation, and social copying?**
+
+The MVP answers it end-to-end. Three shipped presets — `cooperation-vs-selfish-low`, `-mid`, `-high` — run the same experiment under increasingly tight food supply. The answer is read straight out of the emitted metrics.
+
+For the seed shipped with the project, the outcome shape is:
+
+| Scarcity | Population at horizon | Cooperative survives? | Aggressive survives? |
+|---|---|---|---|
+| low | ~50 | yes | yes |
+| mid | ~10 | yes | yes |
+| high | ~1 | yes | no |
+
+Under crushing scarcity, the aggressive meme goes extinct.
+
+---
+
+## What ships today
+
+The simulator runs the full life-cycle described above and writes everything to disk:
+
+- A grid world where agents move, eat, share, attack, imitate, transmit, reproduce, and die. Death has three causes: starvation, aging, combat.
+- Bounded **symbolic memes** with a trigger, a target, an effect, a strength, and a few probabilities. Six starters ship in the box: share with allies, avoid strangers, copy high-energy agents, attack low-energy outsiders, punish non-sharers, prefer agents with the same meme.
+- **Mutation and recombination** with full lineage tracking — every meme alive at any tick traces back through its ancestors to a founding starter.
+- **A live terminal UI** (the GIF up top) with the world on the left and a chart of meme prevalence over time on the right.
+- **A headless mode** that produces byte-identical output to the TUI for the same seed.
+- **A self-describing run artifact**: every run writes its resolved config, a JSON-Lines event stream, and a flat CSV summary, all under `runs/<timestamp>-<name>/`.
+
+The whole thing has **47 tests**, runs **1000 ticks in under a second** in release mode, and is **bit-identical** across reruns with the same seed. The constitution that keeps it that way lives at [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
+
+---
+
+## Quick start
+
+```sh
+# The milestone, one command:
+cargo run --release -p meme-garden-cli -- headless \
+  --preset cooperation-vs-selfish-low --seed 42
+
+# The same world, but you can watch:
+cargo run -p meme-garden-cli -- run \
+  --preset cooperation-vs-selfish-mid --seed 42
+
+# See what's in the box:
+cargo run -p meme-garden-cli -- list-presets
+
+# Talk to a finished run:
+cargo run -p meme-garden-cli -- analyze runs/<some-run>/
+```
+
+Inside the TUI: `space` to pause, `s` to single-step, `+` / `-` to speed up or down, `q` to quit. The right pane shows live prevalence per meme kind; the left pane shows agents (`C` = cooperative carrier, `S` = aggressive carrier, `X` = both, `a` = no relevant meme) and food (`.`).
+
+---
+
+## Architecture at a glance
+
+The project is two Rust crates. **Core is pure** — no terminal, no network, no filesystem writes. The **CLI** wraps it, owns I/O, and presents the TUI or the headless runner.
+
+```mermaid
+flowchart LR
+    Config["configs/*.toml"] -- load --> CLI
+    CLI["meme-garden-cli<br/>main, runner, export, app, tui"] -- "(config, seed)" --> Core
+    Core["meme-garden-core<br/>Simulation, Agent, Meme,<br/>policy, mutation, lineage"] -- "Metrics + Events" --> CLI
+    CLI -- "events.jsonl<br/>summary.csv<br/>config.toml" --> Runs["runs/&lt;id&gt;/"]
+    CLI -- ratatui --> Term[(Terminal)]
+    Core -. trait .-> AI["MemeNamer<br/>ExperimentDesigner<br/>RunAnalyst<br/>(NoopProvider in MVP)"]
+
+    classDef pure fill:#eef,stroke:#557;
+    classDef impure fill:#fee,stroke:#a55;
+    class Core pure;
+    class CLI,Runs,Term impure;
+```
+
+One tick of the simulation is a fixed sequence of phases. Reordering them is a breaking change — the determinism gate fires immediately:
+
+```mermaid
+flowchart TB
+    P1[Perception<br/><i>read-only neighborhood snapshot</i>]
+    P2[Policy<br/><i>traits + memes → weighted Action</i>]
+    P3[Action execution<br/><i>move, eat, share, attack, imitate</i>]
+    P4[Transmission<br/><i>roll per-meme, maybe mutate</i>]
+    P5[Reproduction<br/><i>inherit traits + memes, recombine</i>]
+    P6[Death<br/><i>metabolism + aging + cognitive cost</i>]
+    P7[World maintenance<br/><i>food regrowth</i>]
+    P8[Metrics emission<br/><i>Tick + Extinction + ClusterSnapshot</i>]
+    P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8
+    P8 -. "tick += 1" .-> P1
+```
+
+And the data inside the simulator — what an Agent and a Meme actually look like — is bounded and small:
+
+```mermaid
+classDiagram
+    class Agent {
+      AgentId id
+      Position position
+      f32 energy
+      u32 age
+      bool alive
+      f32 social_copying_bias
+      Trait[] traits
+      Memory memory
+      TrustMap trust
+      Meme[] inventory
+    }
+
+    class Meme {
+      MemeId id
+      LineageId lineage_id
+      MemeKind kind
+      Trigger trigger
+      TargetSelector target
+      Effect effect
+      f32 strength
+      f32 transmissibility
+      f32 mutation_rate
+      f32 cognitive_cost
+    }
+
+    class LineageGraph {
+      LineageNode[] nodes
+      add(parents, tick, origin) LineageId
+      trace_to_starter(id) LineageId
+    }
+
+    Agent "1" o-- "0..n" Meme : inventory
+    Meme "n" --> "1" LineageGraph : lineage_id ↦ node
+```
+
+That's the whole mental model. Memes are inventory items. Inventory items bias behavior. Behavior changes who's adjacent to whom next tick, which changes who transmits what, which changes which memes survive.
+
+---
+
+## Config reference
+
+Every run is a TOML file. Below is every section, every knob, and what turning it does.
+
+### `[world]` — the grid
+
+| Param | Meaning |
+|---|---|
+| `width` | Grid columns. |
+| `height` | Grid rows. Agents can stack on the same cell. |
+
+Bigger grid → agents spread out, transmission slows. Smaller grid → forced contact, faster spread, more fights.
+
+### `[agents]` — population & life-cycle
+
+| Param | Meaning |
+|---|---|
+| `count` | Initial agent population. |
+| `starting_energy` | Energy each agent spawns with. Also the baseline for the `Hungry` trigger (`< 0.5 ×`) and the `LowEnergyAgent` target. |
+| `metabolism` | Energy lost per tick by every living agent, before action costs. |
+| `max_energy` | Hard cap. The `HighEnergyAgent` threshold is `0.75 ×` this. |
+| `max_age` | Ticks before death by aging. |
+| `initial_traits_dist` | Probabilities summing to 1.0: `[Generous, Cautious, Aggressive, Conformist]`. Traits bias per-tick action weights. |
+| `trait_mutation_rate` | Per-trait chance at reproduction that an inherited trait re-rolls. |
+
+### `[food]` — the resource
+
+| Param | Meaning |
+|---|---|
+| `initial_density` | Fraction of cells seeded with food at tick 0. |
+| `regrowth_rate` | Per-empty-cell, per-tick chance of food growing. |
+| `energy_per_food` | Energy gained when eating one food unit. |
+
+### `[scarcity]` — convenience knob
+
+| Param | Meaning |
+|---|---|
+| `level` | One of `low` (1.0× food), `mid` (0.5×), `high` (0.2×), `custom` (leave food values untouched). Multiplied into `food.initial_density` and `food.regrowth_rate` at load time. |
+
+This is why the three milestone presets are byte-identical except for this one line.
+
+### `[cognition]` — bounded inventory
+
+| Param | Meaning |
+|---|---|
+| `inventory_cap` | Max memes per agent. On overflow the **oldest** meme is dropped FIFO and a `MemeForgotten` event fires. |
+
+### `[transmission]` — how memes spread
+
+| Param | Meaning |
+|---|---|
+| `base_rate` | Multiplied into every transmission roll. `0` disables transmission entirely. |
+| `social_copying_bias_mean` | Mean of the per-agent "how willing am I to adopt new ideas" trait, sampled at birth. |
+| `social_copying_bias_std` | Spread of that per-agent draw. |
+| `prestige_boost` | Additive bonus when the transmitter is in the top-quartile of energy. |
+
+The roll for "does meme M move from A to B this tick" is `base_rate × meme.transmissibility × B.social_copying_bias`, plus `prestige_boost` if A is high-energy, clamped to `[0, 1]`.
+
+### `[mutation]` — how memes change
+
+| Param | Meaning |
+|---|---|
+| `strength_jitter_max` | Max ± delta on `strength` on a mutation event. Clamped to `[0, 1]`. |
+| `enum_swap_probability` | Probability a mutation event swaps one of `trigger`, `target`, or `effect` to a different variant. |
+
+The per-meme `mutation_rate` gates *whether* mutation fires on a transmission; these knobs control *how big* the change is. Mutation preserves the meme's `kind`.
+
+### `[reproduction]` — making new agents
+
+| Param | Meaning |
+|---|---|
+| `energy_threshold` | Both parents must be at or above this energy. |
+| `offspring_energy_cost` | Energy each parent pays. |
+| `inherit_meme_prob` | Per-parent-meme probability of inheritance. |
+| `min_age` | Minimum age to reproduce. |
+
+Recombination of two parental memes fires with a fixed 20% chance when both parents have non-empty inventories.
+
+### `[attack]` — combat
+
+| Param | Meaning |
+|---|---|
+| `energy_cost_attacker` | Energy the attacker spends. |
+| `energy_steal` | Energy transferred from victim to attacker (capped at victim's energy). |
+| `retaliation_chance` | _Reserved._ Parsed but not yet wired into victim counter-attack. |
+
+Attacks also drop the victim's trust in the attacker, mark the victim as recently attacked (which feeds the `AttackedRecently` trigger for 10 ticks), and kill the victim if energy reaches zero.
+
+### `[sharing]` — the cooperative action
+
+| Param | Meaning |
+|---|---|
+| `share_threshold` | Donor only shares if its own energy is above this. |
+| `share_amount` | Energy transferred per share. The donor's trust in the recipient bumps `+0.10`. |
+
+### `[[memes.seed]]` — initial meme pool
+
+A repeated table — one entry per seeded meme.
+
+| Param | Meaning |
+|---|---|
+| `name` | One of the six starters: `share_with_allies`, `avoid_strangers`, `copy_high_energy`, `attack_low_energy_outsiders`, `punish_non_sharers`, `prefer_same_meme`. |
+| `carrier_fraction` | Independent per-agent probability of receiving this starter. Two entries at `0.5` give ~25% of agents both, ~25% neither, ~50% exactly one. |
+
+### `[run]` — execution control
+
+| Param | Meaning |
+|---|---|
+| `seed` | The **only** randomness source. Same seed + same config = bit-identical metrics. |
+| `horizon` | Max ticks. Overridable via `--ticks`. |
+| `stop_on_extinction` | If `true`, terminate at the first population extinction. Default `false` keeps emitting metrics so the post-extinction tail is visible. |
+| `cluster_snapshot_every` | Cadence (in ticks) for Jaccard-similarity cultural-cluster snapshots. `0` disables. |
+| `metrics_emit_every` | Cadence for per-tick metric emission. Raise it for shorter `events.jsonl`. |
+| `survival_threshold` | Prevalence a meme must clear at horizon to be reported as "survived." |
+
+---
+
+## Quick recipes
+
+- **Make cooperation fail.** Raise `agents.metabolism`, lower `food.regrowth_rate`, raise `sharing.share_amount`. Donors bleed energy faster than they can recover it.
+- **Maximize mutation drift.** Raise `mutation.strength_jitter_max` and `mutation.enum_swap_probability` toward 1.0.
+- **Pure deterministic baseline (no mutation, no trait drift).** Set `mutation.strength_jitter_max = 0`, `mutation.enum_swap_probability = 0`, `agents.trait_mutation_rate = 0`. Memes still spread but never change.
+- **Fast-forward a sweep.** Set `metrics_emit_every = 10`, `cluster_snapshot_every = 0`, raise `--ticks`. Same simulation, ~10× smaller `events.jsonl`.
+- **Force a single-meme world.** Drop one `[[memes.seed]]` entry and bump the remaining one to `0.9+`. Useful for "does this meme spread on its own merits" tests.
+- **Test a meme's solo viability.** Seed only one starter at `carrier_fraction = 0.05`. Check whether it reaches `≥ run.survival_threshold` by horizon.
+- **Reproducibility sanity check.** Run twice with the same seed. The hash of `tail -n +2 events.jsonl` (i.e. everything after the run-id-bearing header) must match.
+
+---
+
+---
+
+# Tech spec
+
+Everything below is for someone reading or editing the code. The narrative above is what the project *is*; this section is how it *works*.
 
 ## Workspace layout
 
@@ -54,329 +306,116 @@ The project constitution (binding rules) is at
 crates/
   meme-garden-core/         simulation engine — pure, deterministic, no I/O
     src/
-      lib.rs                public surface
-      rng.rs                SimRng — the ONLY randomness source
-      config.rs             SimConfig + sub-configs + validation
+      lib.rs                public surface + CORE_VERSION
+      rng.rs                SimRng — the ONLY randomness source (Pcg64Mcg)
+      config.rs             SimConfig + sub-configs + validate + legacy adapter
       world.rs              Simulation + 8-phase tick loop + Grid
       agent.rs              Agent, AgentId, AgentTrait, AgentMemory, TrustMap
       meme.rs               Meme + Trigger/TargetSelector/Effect/MemeKind enums
-      action.rs             Action enum (Move/Eat/Share/Attack/...)
-      policy.rs             per-tick action resolution
+      action.rs             Action enum (Move/Eat/Share/Attack/Imitate/Transmit/Reproduce/Idle)
+      policy.rs             per-tick compute_action + Perception + NeighborInfo
       mutation.rs           mutate_in_place + recombine
-      lineage.rs            LineageGraph (append-only)
-      starters.rs           six starter meme constructors
-      metrics.rs            Metrics + Event enum + diversity/dominance helpers
+      lineage.rs            LineageGraph (append-only, traces to starter)
+      starters.rs           six starter meme constructors + STARTERS table
+      metrics.rs            Metrics + Event enum + shannon/top1 helpers
       ai.rs                 MemeNamer / ExperimentDesigner / RunAnalyst + NoopProvider
     tests/                  9 integration test files
   meme-garden-cli/          binary: TUI + headless runner
     src/
-      main.rs               clap subcommands: run | headless | list-presets | export | analyze | experiment
-      runner.rs             shared tick loop + default_run_id timestamp
-      export.rs             RunWriter (JSONL + CSV + config.toml)
-      app.rs                TUI state
+      main.rs               clap subcommands (run | headless | list-presets | export | analyze | experiment)
+      runner.rs             shared tick loop + default_run_id timestamp generator
+      export.rs             RunWriter (JSONL + CSV + config.toml) + export helpers
+      app.rs                TUI state (history ring + tps + pause)
       tui.rs                ratatui rendering (grid + sparkline)
-    tests/                  4 CLI integration test files
+    tests/                  4 CLI integration test files (headless, sweep, export_roundtrip, list-presets)
 configs/
   default.toml              baseline parameters
-  presets/                  shipped milestone presets
-    cooperation-vs-selfish-low.toml
-    cooperation-vs-selfish-mid.toml
-    cooperation-vs-selfish-high.toml
+  presets/                  shipped milestone presets (low/mid/high scarcity)
 docs/
   design.md                 long-term vision (north star, not spec)
   meme-grammar.md           the symbolic grammar in detail
-runs/                       per-run artifacts (gitignored)
+  assets/                   README assets (gif)
+runs/                       per-run artifacts (gitignored except .gitkeep)
 specs/001-meme-garden-mvp/  executable spec: spec.md, plan.md, tasks.md, contracts/
-.specify/memory/constitution.md   project principles
+.specify/memory/constitution.md   project principles (binding rules)
 ```
 
-## The 8-phase tick loop
+## The 8-phase tick loop in detail
 
-Each `Simulation::step()` runs phases in this **fixed** order — reordering them
-breaks the determinism contract:
+Implemented in `crates/meme-garden-core/src/world.rs::Simulation::step`. Phase order is the determinism contract; reordering changes outputs and breaks the regression test.
 
-1. **Perception** — for every living agent, build a read-only snapshot of
-   its 4-neighborhood (adjacent food, nearby agents with trust/energy
-   classifications, hunger flag, attacked-recently flag). No state changes.
-2. **Policy resolution** — pick one `Action` per agent. Start from a baseline
-   distribution biased slightly by traits; for each meme whose `trigger`
-   matches, multiply the weight of the meme's `effect` category by
-   `(1 + strength)`; zero out impossible categories; sample via `SimRng`.
-3. **Action execution** — apply the chosen action. Movement, eating,
-   sharing, attacking, imitating. Death emits `Event::Death`.
-4. **Transmission** — for each agent in `AgentId` order, for each meme in
-   inventory order, roll transmission against eligible neighbors. On success,
-   maybe mutate. Emit `Event::Transmission` and (if applicable)
-   `Event::Mutation`.
-5. **Reproduction** — adjacent eligible pairs produce offspring; offspring
-   inherit a subset of parent traits + memes; recombination may fuse two
-   parental memes. Emit `Event::Birth`.
-6. **Death** — apply metabolism + cognitive cost; agents past `max_age` or
-   below 0 energy die. Trust map decays.
-7. **World maintenance** — food regrowth.
-8. **Metrics emission** — compute per-tick aggregate, emit `Event::Tick`,
-   detect first-time extinction events, emit cluster snapshots on cadence.
+1. **`perception_phase` (`world.rs`)** — for every agent, build a `Perception` struct (`policy.rs`): adjacent food cells, 4-cell-radius neighbors with classifications (trust, kin, shares-meme, high/low-energy), the `hungry` flag (`energy < 0.5 × starting_energy`), the `attacked_recently` flag (last attack within 10 ticks). Read-only.
 
-## Run it
+2. **`policy_phase` (`world.rs`)** — for each living agent in `AgentId` order, call `policy::compute_action`. The algorithm: start from an 8-slot baseline weight array (one slot per action category); multiply by trait modifiers (`Generous` × 1.4 on Share, `Cautious` × 0.6 on Attack, etc.); bias by hunger and adjacent food; gate reproduction by energy + age + partner; **for each meme whose `trigger` matches the perception, multiply the weight of `effect_to_category(meme.effect)` by `(1 + meme.strength)`**; zero out categories with no valid target (e.g. no adjacent hungry ally → Share weight 0). Sample via `SimRng`, then turn the category into a concrete `Action` by picking a target (e.g. `pick_share_target`, `pick_attack_target`).
 
-### One-line milestone
+3. **`action_phase` (`world.rs`)** — apply each chosen `Action` in `AgentId` order. Decrements `energy` by `metabolism + Σ cognitive_cost`; emits `Event::Death { cause: Starvation }` on `energy ≤ 0`. `Share`, `Attack`, and `Imitate` mutate the relevant agents and the trust map. `Imitate` inherits the target's first novel meme into the imitator's inventory (subject to `inventory_cap`; oldest gets evicted FIFO, emitting `MemeForgotten`).
 
-```sh
-cargo run --release -p meme-garden-cli -- headless \
-  --preset cooperation-vs-selfish-low --seed 42
-```
+4. **`transmission_phase` (`world.rs`)** — independent from `Action::Transmit`; runs over all (agent, meme) pairs for every adjacent neighbor. Roll `p = base_rate × meme.transmissibility × recipient.social_copying_bias (+ prestige_boost if sender is top-quartile energy)` via `SimRng::gen_bool`. On success, allocate new `MemeId` + lineage node (`LineageOrigin::Inheritance`), then roll `meme.mutation_rate`; if it hits, call `mutation::mutate_in_place` and (on a real mutation) allocate a second lineage node (`LineageOrigin::Mutation`). Apply `inventory_cap` and push. Emit `Event::Transmission` and (on mutation) `Event::Mutation`.
 
-Writes `runs/<YYYYMMDD-HHMMSS>-cooperation-vs-selfish-low/{config.toml,events.jsonl,summary.csv}`.
+5. **`reproduction_phase` (`world.rs`)** — iterate in `AgentId` order; for each agent meeting `energy ≥ reproduction.energy_threshold && age ≥ reproduction.min_age`, find an adjacent partner with the same energy precondition (i < j to avoid double counting). Both parents pay `offspring_energy_cost`. Offspring takes traits inherited from union of parents with `agents.trait_mutation_rate` per-trait reroll, social-copying-bias = average of parents, and memes inherited per parent at `reproduction.inherit_meme_prob` (each gets a fresh `MemeId` + `LineageOrigin::Inheritance` node). With 20% probability and a free inventory slot, fuse `parents[i].inventory[0]` and `parents[j].inventory[0]` via `mutation::recombine` → `Event::Recombination`. Emit `Event::Birth`.
 
-### Interactive TUI
+6. **`death_phase` (`world.rs`)** — agents with `age ≥ max_age` die (`cause: Aging`). Trust map entries decay by 1% per tick; entries with `|trust| < 0.05` are dropped.
 
-```sh
-cargo run -p meme-garden-cli -- run --preset cooperation-vs-selfish-mid --seed 42
-```
+7. **`world_maintenance_phase` (`world.rs`)** — for each empty cell, `SimRng::gen_bool(food.regrowth_rate)` to spawn food. O(W·H) per tick.
 
-Left pane shows the world grid (`C` = cooperative carrier, `S` = selfish
-carrier, `X` = both, `a` = no relevant meme, `.` = food). Right side shows the
-live metric panel plus a prevalence-over-time chart.
+8. **`emit_metrics_phase` (`world.rs`)** — walk all living agents to compute per-tick aggregates: `population_by_trait` counts, `meme_count`, `carriers_by_kind[7]` (carriers, not instances, per `data-model.md`), `meme_prevalence_by_kind = carriers / alive`, `mean_energy`, `mean_age`. Then `diversity_shannon = shannon_diversity(prevalence)` and `dominance_top1_fraction = top1_fraction(prevalence)`. Emit `Event::Tick(Box<Metrics>)`. Detect first-time population/meme extinction and emit `Event::Extinction` exactly once each. Every `run.cluster_snapshot_every` ticks, run `compute_clusters` (Jaccard on inventory-kind sets, threshold `0.6`) → `Event::ClusterSnapshot`.
 
-### Sweep three scarcity levels
+After phase 8, `tick += 1` and the next call to `step()` repeats.
 
-```sh
-for level in low mid high; do
-  cargo run --release -q -p meme-garden-cli -- headless \
-    --preset cooperation-vs-selfish-$level --seed 42 --ticks 1000 \
-    --run-id milestone-$level
-done
+## Determinism contract
 
-# Compare final prevalence:
-for level in low mid high; do
-  printf "%-5s " $level
-  tail -1 runs/milestone-$level/summary.csv \
-    | awk -F, '{printf "alive=%-3s coop=%.3f aggr=%.3f\n", $2, $5, $8}'
-done
-```
+`crates/meme-garden-core` MUST NOT touch `std::time`, `rand::thread_rng`, environment variables, process IDs, or any other ambient nondeterminism. Every stochastic decision goes through `rng::SimRng`, which is owned by `Simulation` and constructed from the `(config, seed)` pair in `Simulation::new`. The CLI's `runner::default_run_id` is the only place a wall-clock dependency lives — it generates the run directory name **before** `Simulation::new` is called, so the timestamp never enters the metrics stream.
 
-### Inspect a run
+The contract has two tripwires:
 
-```sh
-# Markdown summary via the RunAnalyst seam (NoopProvider for now):
-cargo run -p meme-garden-cli -- analyze runs/milestone-low/
+- `crates/meme-garden-core/src/world.rs::tests::same_seed_same_metrics` — paired `Simulation` instances with the same seed produce identical event JSON for 100 ticks.
+- `crates/meme-garden-core/tests/milestone.rs::milestone_direction_is_recorded` — the cooperative-vs-selfish experiment's *direction* of survival under low/mid/high scarcity is stable across re-runs. If the simulator changes shape, this fails and the milestone outcome has to be reconfirmed deliberately.
 
-# Cooperative vs aggressive prevalence over time, via jq:
-jq -r 'select(.kind=="tick") | "\(.tick),\(.meme_prevalence_by_kind.cooperative),\(.meme_prevalence_by_kind.aggressive)"' \
-   runs/milestone-low/events.jsonl | tail -20
+## Run artifacts
 
-# Regenerate summary.csv from events.jsonl:
-cargo run -p meme-garden-cli -- export runs/milestone-low --to csv
+Each run writes three files under `runs/<YYYYMMDD-HHMMSS>-<short-name>/`, created by `crates/meme-garden-cli/src/export.rs::RunWriter`:
 
-# Validate the JSONL stream:
-cargo run -p meme-garden-cli -- export runs/milestone-low --to jsonl
-```
+- `config.toml` — byte-identical resolved configuration (after `scarcity.apply_scarcity()`), so the artifact is self-describing.
+- `events.jsonl` — line-delimited JSON. First record is `{"kind":"header","schema_version":1,"run_id":"...","core_version":"..."}`. Subsequent records are tagged-union `Event`s: `tick`, `birth`, `death`, `transmission`, `mutation`, `recombination`, `meme_forgotten`, `extinction`, `cluster_snapshot`.
+- `summary.csv` — flat per-tick summary, header first row. Same first columns as the POC's CSV for backward-compatible tooling.
 
-### Other commands
+`RunWriter::finalize` flushes and `fsync`s both files so a `kill -9`'d run leaves recoverable artifacts. The contract for the JSONL stream lives at [`specs/001-meme-garden-mvp/contracts/metrics.schema.md`](specs/001-meme-garden-mvp/contracts/metrics.schema.md).
 
-```sh
-cargo run -p meme-garden-cli -- list-presets
-cargo run -p meme-garden-cli -- experiment design "study famine cooperation"
-#   → exits 2 with "Error: ai provider not configured" (NoopProvider stub)
-```
+## Constitution principles (binding)
 
-## TUI keys
+From [`.specify/memory/constitution.md`](.specify/memory/constitution.md):
 
-| key | action |
-|---|---|
-| `space` | pause / resume |
-| `s` | single step (while paused) |
-| `+` / `-` | speed up / slow down |
-| `q`, esc | quit |
+- **I. Determinism Is Sacred (NON-NEGOTIABLE)** — every RNG flows through `SimRng`; same `(seed, config)` ⇒ bit-identical metrics.
+- **II. Pure Core, Impure Edges** — `meme-garden-core` reads config but writes nothing; the CLI owns file I/O and the TUI.
+- **III. Stable Iteration Order** — agents are processed in `AgentId` order; `HashMap` iteration is banned in the hot path.
+- **IV. Symbolic Memes, Not Black Boxes** — memes are bounded `{trigger, target, effect, strength, transmissibility, mutation_rate, cognitive_cost, lineage}`; no LLM or arbitrary-code execution inside `Simulation::step`.
+- **V. Metrics-First Experimentation** — every behavioral claim must be answerable from the metrics stream, not from eyeballing the TUI.
 
-## Test
+PRs that touch the simulator MUST address each principle in the description (even if only to assert "no constitutional impact").
+
+## Tests
 
 ```sh
 cargo test --workspace
 ```
 
-47 tests; load-bearing among them:
+47 tests across 13 files. The load-bearing ones:
 
-- `world::tests::same_seed_same_metrics` — Principle I determinism gate.
-- `tests/milestone.rs::milestone_direction_is_recorded` — the cooperative-vs-selfish
-  experiment's *direction* of survival is stable across re-runs. Changing the
-  simulator changes which scarcity buckets the cooperative meme survives in;
-  that's a milestone outcome, not a defect to be hidden by relaxing the test.
-- `tests/tui_headless_equivalence.rs` — TUI and headless produce identical event
-  streams for the same `(config, seed)`.
-
-## Config reference
-
-Every run is parameterized by a TOML file deserialized into `SimConfig`. Below is
-the full surface. Defaults shown are the values in
-`configs/presets/cooperation-vs-selfish-low.toml`.
-
-### `[world]` — the grid
-
-| Param | Type | Meaning |
-|---|---|---|
-| `width` | `u32 > 0` | Grid columns. |
-| `height` | `u32 > 0` | Grid rows. Agents can stack on the same cell. |
-
-Bigger grid → agents spread out, transmission slows. Smaller grid → forced contact, faster spread, more fights.
-
-### `[agents]` — population & life-cycle
-
-| Param | Type | Meaning |
-|---|---|---|
-| `count` | `u32 > 0` | Initial agent population. |
-| `starting_energy` | `f32 > 0` | Energy each agent spawns with. Also the baseline for the `Hungry` trigger (`< 0.5 × starting_energy`) and the `LowEnergyAgent` target. |
-| `metabolism` | `f32 ≥ 0` | Energy lost per tick by every living agent, before action costs. |
-| `max_energy` | `f32 ≥ starting_energy` | Hard cap. Threshold for `HighEnergyAgent` is `0.75 × max_energy`. |
-| `max_age` | `u32 > 0` | Ticks before death by `Aging`. |
-| `initial_traits_dist` | `[f32; 4]` summing to 1.0 | Initial trait distribution: `[Generous, Cautious, Aggressive, Conformist]`. Traits bias per-tick action weights (e.g. `Generous` × 1.4 on `Share`). |
-| `trait_mutation_rate` | `f32 ∈ [0, 1]` | Per-trait probability at reproduction that an inherited trait re-rolls. |
-
-### `[food]` — the resource
-
-| Param | Type | Meaning |
-|---|---|---|
-| `initial_density` | `f32 ∈ [0, 1]` | Fraction of cells seeded with food at tick 0. |
-| `regrowth_rate` | `f32 ∈ [0, 1]` | Per-empty-cell, per-tick probability of food growing. |
-| `energy_per_food` | `f32 > 0` | Energy gained when eating one food unit. |
-
-### `[scarcity]` — convenience knob
-
-| Param | Type | Meaning |
-|---|---|---|
-| `level` | `"low" \| "mid" \| "high" \| "custom"` | Multiplier applied to `food.initial_density` and `food.regrowth_rate` at load: `low` = 1.0×, `mid` = 0.5×, `high` = 0.2×. `custom` leaves `food.*` untouched. The resolved (post-multiplier) values are what get written to `runs/<id>/config.toml`. |
-
-This is why the three milestone presets are identical except for one line.
-
-### `[cognition]` — bounded inventory
-
-| Param | Type | Meaning |
-|---|---|---|
-| `inventory_cap` | `u32 > 0` | Max memes per agent. On overflow the **oldest** meme is dropped FIFO and a `MemeForgotten` event fires. |
-
-### `[transmission]` — how memes spread
-
-| Param | Type | Meaning |
-|---|---|---|
-| `base_rate` | `f32 ∈ [0, 1]` | Multiplied into every transmission roll. `0` disables all transmission. |
-| `social_copying_bias_mean` | `f32 ∈ [0, 1]` | Mean of the per-agent "how willing am I to adopt new memes" trait, sampled at birth. |
-| `social_copying_bias_std` | `f32 ≥ 0` | Standard deviation of that per-agent draw. |
-| `prestige_boost` | `f32 ∈ [0, 1]` | Additive bonus when the transmitter is top-quartile energy. |
-
-Roll for "does meme M move from A to B this tick":
-
-```
-p = base_rate * meme.transmissibility * B.social_copying_bias
-if A is top-quartile energy: p += prestige_boost
-sample = SimRng.gen_bool(p.clamp(0, 1))
-```
-
-### `[mutation]` — how memes change on transmission
-
-| Param | Type | Meaning |
-|---|---|---|
-| `strength_jitter_max` | `f32 ≥ 0` | Max ± delta on `strength` (clamped to `[0, 1]`). |
-| `enum_swap_probability` | `f32 ∈ [0, 1]` | Probability a mutation event swaps one of `trigger`/`target`/`effect` to a different enum variant. |
-
-The per-meme `mutation_rate` (in `starters.rs`) gates *whether* mutation fires on
-a transmission; these knobs control *how big* the change is. Mutation preserves
-`MemeKind`.
-
-### `[reproduction]` — making new agents
-
-| Param | Type | Meaning |
-|---|---|---|
-| `energy_threshold` | `f32` | Both parents must be ≥ this energy. |
-| `offspring_energy_cost` | `f32` | Energy each parent pays. |
-| `inherit_meme_prob` | `f32 ∈ [0, 1]` | Per-parent-meme probability of inheritance. |
-| `min_age` | `u32` | Minimum age to reproduce. |
-
-Recombination of two parental memes fires with a fixed 20% chance when both
-parents have non-empty inventories.
-
-### `[attack]` — combat mechanics
-
-| Param | Type | Meaning |
-|---|---|---|
-| `energy_cost_attacker` | `f32 ≥ 0` | Energy the attacker spends. |
-| `energy_steal` | `f32 ≥ 0` | Energy transferred from victim to attacker (capped at victim's energy). |
-| `retaliation_chance` | `f32 ∈ [0, 1]` | _Reserved._ Currently parsed but not yet wired into victim counter-attack. |
-
-Attacks drop the victim's trust in the attacker by 0.30, set
-`last_attacker` in memory (feeding the `AttackedRecently` trigger for 10 ticks),
-and emit `Death { cause: Combat }` on kill.
-
-### `[sharing]` — the cooperative action
-
-| Param | Type | Meaning |
-|---|---|---|
-| `share_threshold` | `f32` | Donor only shares if its own energy is above this. |
-| `share_amount` | `f32 > 0` | Energy transferred per share. Donor's trust in recipient bumps `+0.10`. |
-
-### `[[memes.seed]]` — initial meme pool
-
-Repeated table — one entry per seeded meme.
-
-| Param | Type | Meaning |
-|---|---|---|
-| `name` | string | Must be one of the six starters: `share_with_allies`, `avoid_strangers`, `copy_high_energy`, `attack_low_energy_outsiders`, `punish_non_sharers`, `prefer_same_meme`. |
-| `carrier_fraction` | `f32 ∈ [0, 1]` | Independent per-agent probability of getting this starter. Two entries at `0.5` give ~25% with both, ~25% with neither, ~50% with exactly one. |
-
-### `[run]` — execution control
-
-| Param | Type | Meaning |
-|---|---|---|
-| `seed` | `u64` | The **only** randomness source. Same seed + same config = bit-identical metrics. Overridable via `--seed`. |
-| `horizon` | `u32 > 0` | Max ticks. Overridable via `--ticks`. |
-| `stop_on_extinction` | `bool` | If `true`, terminate at the first population extinction. Default `false` keeps emitting per-tick metrics so the post-extinction tail is visible. |
-| `cluster_snapshot_every` | `u32` | Cadence (ticks) for Jaccard cultural-cluster snapshots. `0` disables. |
-| `metrics_emit_every` | `u32 ≥ 1` | Cadence for `Event::Tick`. Raise for shorter `events.jsonl`. |
-| `survival_threshold` | `f32 ∈ [0, 1]` | Prevalence bar a meme must clear at horizon to be reported as "survived." |
-
-## Quick recipes
-
-- **Make cooperation fail.** Raise `agents.metabolism`, lower
-  `food.regrowth_rate`, raise `sharing.share_amount`. Donors bleed energy
-  faster than they can recover it.
-- **Maximize mutation drift.** Raise `mutation.strength_jitter_max` and
-  `mutation.enum_swap_probability` toward 1.0. (Per-meme `mutation_rate` is in
-  `starters.rs` for now.)
-- **Pure deterministic baseline (no mutation, no trait drift).** Set
-  `mutation.strength_jitter_max = 0`, `mutation.enum_swap_probability = 0`,
-  `agents.trait_mutation_rate = 0`. Memes still spread but never mutate.
-- **Fast-forward sweep.** Set `metrics_emit_every = 10`,
-  `cluster_snapshot_every = 0`, raise `--ticks`. Same simulation, ~10× smaller
-  `events.jsonl`.
-- **Force a single-meme world.** Drop one `[[memes.seed]]` entry and bump the
-  remaining one's `carrier_fraction` to `0.9+`. Useful for "does this meme
-  spread on its own merits" tests.
-- **Test a meme's solo viability.** Same as above, but seed only one starter at
-  `0.05`. Check whether it still reaches `≥ run.survival_threshold` by horizon.
-- **Reproducibility check.** Run twice with the same seed, then
-  `tail -n +2 runs/<a>/events.jsonl | shasum -a 256` against the same for run
-  `<b>`. Hashes must match.
-
-## Determinism contract
-
-Every stochastic decision in `meme-garden-core` flows through
-`rng::SimRng`. The core forbids `std::time::*`, `rand::thread_rng`,
-environment variables, and any other ambient nondeterministic source. The CLI
-generates the run-id timestamp before constructing `Simulation`, so wall-clock
-never leaks into the metrics. Two runs with the same seed produce
-byte-identical `events.jsonl` (after stripping the run-id-bearing header).
+- `world::tests::same_seed_same_metrics` — Principle I gate.
+- `crates/meme-garden-core/tests/milestone.rs::milestone_direction_is_recorded` — survival-direction regression.
+- `crates/meme-garden-core/tests/tui_headless_equivalence.rs::drain_cadence_does_not_affect_outputs` — proves the TUI cannot influence the metrics stream.
+- `crates/meme-garden-core/tests/lineage.rs::every_live_meme_traces_to_a_starter` — lineage closure invariant.
+- `crates/meme-garden-core/tests/mutation.rs::mutated_memes_stay_in_enum_ranges` — bounded-mutation invariant.
 
 ## What's next
 
-- LLM-backed implementations of the three AI seams (a future
-  `meme-garden-ai` crate; `meme-garden-core` stays HTTP-free).
-- Lineage-tree visualization pane in the TUI.
-- A `sweep` subcommand that runs a parameter grid in one invocation.
-- A `replay` subcommand that re-renders a finished run in the TUI without
-  re-running the simulator.
-- Mutation of `transmissibility` and `mutation_rate` themselves (currently
-  fixed per-meme, by design — keeps the milestone interpretable).
-- Connected-component cultural clusters (currently Jaccard threshold-based).
-- Property-based fuzzing of the mutation operator.
+Tracked in [`specs/001-meme-garden-mvp/tasks.md`](specs/001-meme-garden-mvp/tasks.md) and `## Open follow-ups` of `research.md`:
 
-The complete tasks list is in
-[`specs/001-meme-garden-mvp/tasks.md`](specs/001-meme-garden-mvp/tasks.md).
+- LLM-backed implementations of the three AI seams (in a future `meme-garden-ai` crate; `meme-garden-core` stays HTTP-free).
+- A lineage-tree visualization pane in the TUI.
+- A `sweep` subcommand that runs a parameter grid in one invocation.
+- A `replay` subcommand that re-renders a finished run from `events.jsonl` without re-running the simulator.
+- Mutation of `transmissibility` and `mutation_rate` themselves (currently fixed per-meme, by design — keeps the milestone interpretable).
+- Connected-component cultural clusters (currently Jaccard threshold-based).
+- Property-based fuzzing of the mutation operator (`proptest`).
+- Removing the legacy-config adapter in `config.rs` (deferred from MVP polish; see `tasks.md::T080`).
