@@ -43,6 +43,27 @@ impl MemeKind {
             MemeKind::Mutant => "mutant",
         }
     }
+
+    /// Classify a meme by what it actually *does*. This is how recombinants and
+    /// effect-mutated memes get their kind: behavior, not founding lineage. The
+    /// mapping mirrors the starter→kind correspondence in `starters.rs`.
+    ///
+    /// Effects with no clear behavioral valence (`MoveToward`, `RefuseInteraction`,
+    /// `TransmitMeme`, `DecreaseTrust`) fall back to `Mutant` — the genuine "can't
+    /// attribute a strategy to this" bucket.
+    pub fn from_effect(effect: Effect) -> MemeKind {
+        match effect {
+            Effect::Share => MemeKind::Cooperative,
+            Effect::Attack => MemeKind::Aggressive,
+            Effect::MoveAway => MemeKind::Defensive,
+            Effect::Imitate => MemeKind::Imitative,
+            Effect::IncreaseTrust => MemeKind::Conformist,
+            Effect::MoveToward
+            | Effect::RefuseInteraction
+            | Effect::TransmitMeme
+            | Effect::DecreaseTrust => MemeKind::Mutant,
+        }
+    }
 }
 
 /// Two meme kinds conflict when an agent can't sensibly carry both at once.

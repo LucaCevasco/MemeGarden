@@ -75,6 +75,15 @@ pub struct Metrics {
     pub population_by_trait: PopulationByTrait,
     pub meme_count: u32,
     pub meme_prevalence_by_kind: PrevalenceByKind,
+    /// Fraction of living agents carrying at least one meme with a recombinant
+    /// ancestor. Hybrids are classified into coop/aggressive by behavior, so this
+    /// is the only signal that surfaces "how much of the population runs on fused
+    /// memes" independent of which side those memes landed on.
+    pub hybrid_prevalence: f32,
+    /// Of living recombinant-ancestry memes, the fraction whose kind is
+    /// Cooperative. Tells you which way the hybrids lean (≥0.5 → coop). 0.0 when
+    /// there are no hybrids.
+    pub hybrid_cooperative_fraction: f32,
     pub diversity_shannon: f32,
     pub dominance_top1_fraction: f32,
     pub mean_energy: f32,
@@ -87,13 +96,13 @@ pub struct Metrics {
 
 impl Metrics {
     pub fn csv_header() -> &'static str {
-        "tick,alive,food_count,meme_count,prevalence_cooperative,prevalence_defensive,prevalence_imitative,prevalence_aggressive,prevalence_punitive,prevalence_conformist,prevalence_mutant,diversity_shannon,dominance_top1,mean_energy,mean_age,transmissions,mutations,births,deaths"
+        "tick,alive,food_count,meme_count,prevalence_cooperative,prevalence_defensive,prevalence_imitative,prevalence_aggressive,prevalence_punitive,prevalence_conformist,prevalence_mutant,hybrid_prevalence,hybrid_cooperative_fraction,diversity_shannon,dominance_top1,mean_energy,mean_age,transmissions,mutations,births,deaths"
     }
 
     pub fn to_csv_row(&self) -> String {
         let p = self.meme_prevalence_by_kind.as_array();
         format!(
-            "{},{},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.3},{:.3},{},{},{},{}",
+            "{},{},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.3},{:.3},{},{},{},{}",
             self.tick,
             self.alive,
             self.food_count,
@@ -105,6 +114,8 @@ impl Metrics {
             p[4],
             p[5],
             p[6],
+            self.hybrid_prevalence,
+            self.hybrid_cooperative_fraction,
             self.diversity_shannon,
             self.dominance_top1_fraction,
             self.mean_energy,
@@ -287,6 +298,8 @@ mod tests {
             population_by_trait: PopulationByTrait::from_array([0; 4]),
             meme_count: 0,
             meme_prevalence_by_kind: PrevalenceByKind::from_array([0.0; 7]),
+            hybrid_prevalence: 0.0,
+            hybrid_cooperative_fraction: 0.0,
             diversity_shannon: 0.0,
             dominance_top1_fraction: 0.0,
             mean_energy: 0.0,

@@ -277,33 +277,39 @@ fn draw_prevalence(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let coop: Vec<(f64, f64)> = app.history[start..]
         .iter()
         .enumerate()
-        .map(|(i, m)| {
-            (
-                i as f64,
-                m.meme_prevalence_by_kind.cooperative as f64,
-            )
-        })
+        .map(|(i, m)| (i as f64, m.meme_prevalence_by_kind.cooperative as f64))
         .collect();
     let agg: Vec<(f64, f64)> = app.history[start..]
         .iter()
         .enumerate()
-        .map(|(i, m)| {
-            (
-                i as f64,
-                m.meme_prevalence_by_kind.aggressive as f64,
-            )
-        })
+        .map(|(i, m)| (i as f64, m.meme_prevalence_by_kind.aggressive as f64))
         .collect();
-    let mutant: Vec<(f64, f64)> = app.history[start..]
+    // Magenta line is no longer the (now-vestigial) Mutant kind — recombinants are
+    // classified by behavior. It tracks hybrid prevalence: the share of agents
+    // carrying a meme with recombinant ancestry, regardless of which side it fights for.
+    let hybrid: Vec<(f64, f64)> = app.history[start..]
         .iter()
         .enumerate()
-        .map(|(i, m)| {
-            (
-                i as f64,
-                m.meme_prevalence_by_kind.mutant as f64,
-            )
-        })
+        .map(|(i, m)| (i as f64, m.hybrid_prevalence as f64))
         .collect();
+
+    // Annotate the hybrid line with how it currently leans, so the magenta line
+    // isn't an opaque "mystery winner".
+    let last = &app.history[app.history.len() - 1];
+    let hybrid_label = if last.hybrid_prevalence <= 0.0 {
+        "hybrid 0%".to_string()
+    } else {
+        let lean = if last.hybrid_cooperative_fraction >= 0.5 {
+            "coop"
+        } else {
+            "selfish"
+        };
+        format!(
+            "hybrid {:.0}% \u{2192}{}",
+            last.hybrid_prevalence * 100.0,
+            lean
+        )
+    };
 
     let datasets = vec![
         Dataset::default()
@@ -313,20 +319,22 @@ fn draw_prevalence(f: &mut ratatui::Frame, area: Rect, app: &App) {
             .style(Style::default().fg(Color::Cyan))
             .data(&coop),
         Dataset::default()
-            .name("sel")
+            .name("selfish")
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
             .style(Style::default().fg(Color::Red))
             .data(&agg),
         Dataset::default()
-            .name("mut")
+            .name(hybrid_label)
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
             .style(Style::default().fg(Color::Magenta))
-            .data(&mutant),
+            .data(&hybrid),
     ];
 
     let chart = Chart::new(datasets)
+        .legend_position(Some(ratatui::widgets::LegendPosition::TopRight))
+        .hidden_legend_constraints((Constraint::Ratio(1, 1), Constraint::Ratio(1, 1)))
         .x_axis(
             Axis::default()
                 .title("tick (recent)")

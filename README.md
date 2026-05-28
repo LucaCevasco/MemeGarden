@@ -35,17 +35,19 @@ We deliberately avoided giving agents natural language or LLM-generated thoughts
 
 > **Can a cooperative meme survive against a selfish meme under different levels of scarcity, mutation, and social copying?**
 
-The MVP answers it end-to-end. Three shipped presets — `cooperation-vs-selfish-low`, `-mid`, `-high` — run the same experiment under increasingly tight food supply. The answer is read straight out of the emitted metrics.
+The MVP answers it end-to-end. Three shipped presets — `cooperation-vs-selfish-low`, `-mid`, `-high` — run the same experiment under increasingly tight food supply (food at 100% / 50% / 20%).
 
-For the seed shipped with the project, the outcome shape is:
+Populations here are small (tens of agents) and meme prevalence drifts, so any single seed is noise. The milestone is therefore recorded as a **win-rate across a 16-seed sweep** (seeds 1–16, horizon 1000) — not one cherry-picked run. A "win" means that side's prevalence leads among the survivors at horizon:
 
-| Scarcity | Population at horizon | Cooperative | Aggressive |
-|---|---|---|---|
-| low | ~67 | **87%** | 13% |
-| mid | ~14 | **100%** | 0% (extinct) |
-| high | 0 | — (total collapse) | — (total collapse) |
+| Scarcity | Cooperative wins | Aggressive wins | Total collapse | Mean population |
+|---|---|---|---|---|
+| low (food abundant) | **14 / 16** | 2 / 16 | 0 / 16 | ~71 |
+| mid (food halved)   | **11 / 16** | 5 / 16 | 0 / 16 | ~17 |
+| high (food at 20%)  | 3 / 16 | 3 / 16 | **10 / 16** | ~0 |
 
-Under abundant food the cooperative meme outcompetes the aggressive one but doesn't push it out entirely. Squeeze food a bit and cooperative wins decisively — the aggressive meme goes extinct before horizon. Squeeze it hard and the whole population dies before either side settles anything. The full event stream is in `runs/<id>/events.jsonl` for anyone who wants to ask the data different questions.
+The answer: **cooperation is broadly viable.** Once predation carries real risk (an attacked agent fights back) and sharing is positive-sum (energy is worth more to a starving neighbour than to a full one), the cooperative meme usually wins under abundant and moderate food. Only under extreme scarcity does the outcome stop being about memes at all — the whole population starves before either side settles anything.
+
+The full per-tick event stream for any run is in `runs/<id>/events.jsonl` for anyone who wants to ask the data different questions.
 
 ---
 
@@ -247,7 +249,7 @@ Recombination of two parental memes fires with a fixed 20% chance when both pare
 |---|---|
 | `energy_cost_attacker` | Energy the attacker spends. |
 | `energy_steal` | Energy transferred from victim to attacker (capped at victim's energy). |
-| `retaliation_chance` | _Reserved._ Parsed but not yet wired into victim counter-attack. |
+| `retaliation_chance` | Probability that a victim who survives the hit strikes back, dealing `energy_steal` damage to the attacker (a deterrent — that energy is destroyed, not transferred). Makes unprovoked predation risky instead of free profit. |
 
 Attacks also drop the victim's trust in the attacker, mark the victim as recently attacked (which feeds the `AttackedRecently` trigger for 10 ticks), and kill the victim if energy reaches zero.
 
@@ -256,7 +258,8 @@ Attacks also drop the victim's trust in the attacker, mark the victim as recentl
 | Param | Meaning |
 |---|---|
 | `share_threshold` | Donor only shares if its own energy is above this. |
-| `share_amount` | Energy transferred per share. The donor's trust in the recipient bumps `+0.10`. |
+| `share_amount` | Energy the donor spends per share. The donor's trust in the recipient bumps `+0.10`. |
+| `recipient_multiplier` | The recipient gains `share_amount × recipient_multiplier`. Above `1.0`, sharing is **positive-sum** — energy is worth more to a starving agent — so cooperative clusters can out-reproduce instead of merely bleeding. Defaults to `1.0` (zero-sum) for legacy configs. |
 
 ### `[[memes.seed]]` — initial meme pool
 
@@ -284,7 +287,7 @@ Each agent receives **at most one** starter at tick 0 — the pool is treated as
 
 ## Quick recipes
 
-- **Make cooperation fail.** Raise `agents.metabolism`, lower `food.regrowth_rate`, raise `sharing.share_amount`. Donors bleed energy faster than they can recover it.
+- **Make cooperation fail.** Set `sharing.recipient_multiplier = 1.0` (sharing back to zero-sum, so cooperators only bleed) and lower `attack.retaliation_chance` toward `0` (predation becomes a free lunch). Raising `agents.metabolism` and lowering `food.regrowth_rate` on top of that starves donors faster than they can recover.
 - **Maximize mutation drift.** Raise `mutation.strength_jitter_max` and `mutation.enum_swap_probability` toward 1.0.
 - **Pure deterministic baseline (no mutation, no trait drift).** Set `mutation.strength_jitter_max = 0`, `mutation.enum_swap_probability = 0`, `agents.trait_mutation_rate = 0`. Memes still spread but never change.
 - **Fast-forward a sweep.** Set `metrics_emit_every = 10`, `cluster_snapshot_every = 0`, raise `--ticks`. Same simulation, ~10× smaller `events.jsonl`.
@@ -349,11 +352,11 @@ Implemented in `crates/meme-garden-core/src/world.rs::Simulation::step`. Phase o
 
 2. **`policy_phase` (`world.rs`)** — for each living agent in `AgentId` order, call `policy::compute_action`. The algorithm: start from an 8-slot baseline weight array (one slot per action category); multiply by trait modifiers (`Generous` × 1.4 on Share, `Cautious` × 0.6 on Attack, etc.); bias by hunger and adjacent food; gate reproduction by energy + age + partner; **for each meme whose `trigger` matches the perception, multiply the weight of `effect_to_category(meme.effect)` by `(1 + meme.strength)`**; zero out categories with no valid target (e.g. no adjacent hungry ally → Share weight 0). Sample via `SimRng`, then turn the category into a concrete `Action` by picking a target (e.g. `pick_share_target`, `pick_attack_target`).
 
-3. **`action_phase` (`world.rs`)** — apply each chosen `Action` in `AgentId` order. Decrements `energy` by `metabolism + Σ cognitive_cost`; emits `Event::Death { cause: Starvation }` on `energy ≤ 0`. `Share`, `Attack`, and `Imitate` mutate the relevant agents and the trust map. `Imitate` inherits the target's first novel meme into the imitator's inventory (subject to `inventory_cap`; oldest gets evicted FIFO, emitting `MemeForgotten`).
+3. **`action_phase` (`world.rs`)** — apply each chosen `Action` in `AgentId` order. Decrements `energy` by `metabolism + Σ cognitive_cost`; emits `Event::Death { cause: Starvation }` on `energy ≤ 0`. `Share`, `Attack`, and `Imitate` mutate the relevant agents and the trust map. `Share` gives the recipient `share_amount × recipient_multiplier` while the donor pays `share_amount`. `Attack` steals `energy_steal`; if the victim survives, it strikes back with probability `retaliation_chance` for `energy_steal` damage to the attacker. `Imitate` inherits the target's first novel meme into the imitator's inventory (subject to `inventory_cap`; oldest gets evicted FIFO, emitting `MemeForgotten`).
 
-4. **`transmission_phase` (`world.rs`)** — independent from `Action::Transmit`; runs over all (agent, meme) pairs for every adjacent neighbor. Roll `p = base_rate × meme.transmissibility × recipient.social_copying_bias (+ prestige_boost if sender is top-quartile energy)` via `SimRng::gen_bool`. On success, allocate new `MemeId` + lineage node (`LineageOrigin::Inheritance`), then roll `meme.mutation_rate`; if it hits, call `mutation::mutate_in_place` and (on a real mutation) allocate a second lineage node (`LineageOrigin::Mutation`). Apply `inventory_cap` and push. Emit `Event::Transmission` and (on mutation) `Event::Mutation`.
+4. **`transmission_phase` (`world.rs`)** — independent from `Action::Transmit`; runs over all (agent, meme) pairs for every adjacent neighbor. Roll `p = base_rate × meme.transmissibility × recipient.social_copying_bias (+ prestige_boost if sender is top-quartile energy)` via `SimRng::gen_bool`. On success, allocate new `MemeId` + lineage node (`LineageOrigin::Inheritance`), then roll `meme.mutation_rate`; if it hits, call `mutation::mutate_in_place` and (on a real mutation) allocate a second lineage node (`LineageOrigin::Mutation`). A mutation that swaps the `effect` field re-derives the meme's `kind` from its new behaviour (`share → cooperative`, `attack → aggressive`). Apply `inventory_cap` and push. Emit `Event::Transmission` and (on mutation) `Event::Mutation`.
 
-5. **`reproduction_phase` (`world.rs`)** — iterate in `AgentId` order; for each agent meeting `energy ≥ reproduction.energy_threshold && age ≥ reproduction.min_age`, find an adjacent partner with the same energy precondition (i < j to avoid double counting). Both parents pay `offspring_energy_cost`. Offspring takes traits inherited from union of parents with `agents.trait_mutation_rate` per-trait reroll, social-copying-bias = average of parents, and memes inherited per parent at `reproduction.inherit_meme_prob` (each gets a fresh `MemeId` + `LineageOrigin::Inheritance` node). With 20% probability and a free inventory slot, fuse `parents[i].inventory[0]` and `parents[j].inventory[0]` via `mutation::recombine` → `Event::Recombination`. Emit `Event::Birth`.
+5. **`reproduction_phase` (`world.rs`)** — iterate in `AgentId` order; for each agent meeting `energy ≥ reproduction.energy_threshold && age ≥ reproduction.min_age`, find an adjacent partner with the same energy precondition (i < j to avoid double counting). Both parents pay `offspring_energy_cost`. Offspring takes traits inherited from union of parents with `agents.trait_mutation_rate` per-trait reroll, social-copying-bias = average of parents, and memes inherited per parent at `reproduction.inherit_meme_prob` (each gets a fresh `MemeId` + `LineageOrigin::Inheritance` node). With 20% probability and a free inventory slot, fuse `parents[i].inventory[0]` and `parents[j].inventory[0]` via `mutation::recombine` (the child's `kind` is derived from its resulting `effect`, then routed through conflict resolution so it can't violate the no-two-conflicting-memes invariant) → `Event::Recombination`. Emit `Event::Birth`.
 
 6. **`death_phase` (`world.rs`)** — agents with `age ≥ max_age` die (`cause: Aging`). Trust map entries decay by 1% per tick; entries with `|trust| < 0.05` are dropped.
 

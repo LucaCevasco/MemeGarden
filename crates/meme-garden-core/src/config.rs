@@ -132,6 +132,16 @@ pub struct AttackConfig {
 pub struct SharingConfig {
     pub share_threshold: f32,
     pub share_amount: f32,
+    /// Energy is worth more to a starving agent than to a full one: the recipient
+    /// gains `share_amount * recipient_multiplier` while the donor pays only
+    /// `share_amount`. A value > 1.0 makes sharing positive-sum, so cooperative
+    /// clusters can out-reproduce. Defaults to 1.0 (zero-sum) for legacy configs.
+    #[serde(default = "default_share_recipient_multiplier")]
+    pub recipient_multiplier: f32,
+}
+
+fn default_share_recipient_multiplier() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -450,6 +460,7 @@ impl From<LegacySimConfig> for SimConfig {
             sharing: SharingConfig {
                 share_threshold: l.meme.share_threshold,
                 share_amount: l.meme.share_amount,
+                recipient_multiplier: 1.0,
             },
             memes: MemePoolConfig {
                 seed: vec![SeedMemeEntry {

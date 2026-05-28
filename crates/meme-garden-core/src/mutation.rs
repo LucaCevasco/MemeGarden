@@ -3,8 +3,11 @@
 //! Mutation operates only on `trigger`, `target`, `effect`, and `strength`. The
 //! per-field enum swap probability and the scalar strength jitter are bounded by
 //! the `MutationConfig`. `transmissibility`, `mutation_rate`, and `cognitive_cost`
-//! are held fixed per the MVP design (see `research.md D-006`). Mutated memes
-//! carry `MemeKind::Mutant` so metrics surface them as a distinct bucket.
+//! are held fixed per the MVP design (see `research.md D-006`). A meme's `kind`
+//! tracks its *behavior*: when a mutation swaps the `effect` field, or when two
+//! parents recombine, the resulting kind is re-derived from the effect via
+//! `MemeKind::from_effect`. This keeps the cooperative/aggressive split honest
+//! and stops recombinants from accumulating in a privileged `Mutant` bucket.
 
 use smallvec::smallvec;
 
@@ -76,13 +79,13 @@ pub fn mutate_in_place(meme: &mut Meme, rng: &mut SimRng, cfg: &MutationConfig) 
         }
     }
 
-    // why: kind tracks the meme's lineage-level identity (cooperative /
-    // aggressive / ...). Strength jitters preserve identity; we leave kind
-    // alone. Effect/target/trigger swaps could change behavior dramatically,
-    // but for milestone reporting we still want to attribute the descendant
-    // to its founding starter, so we keep kind here. A future iteration may
-    // promote behavior-changing mutations to MemeKind::Mutant.
-    let _ = MemeKind::Mutant;
+    // Kind tracks behavior, not founding lineage: an effect swap can flip a
+    // cooperative meme into an aggressive one (or vice versa), so we re-derive
+    // kind from the new effect. Trigger/target/strength changes don't touch what
+    // the meme *does*, so they leave kind alone.
+    if field == Some(MutatedField::Effect) {
+        meme.kind = MemeKind::from_effect(meme.effect);
+    }
     MutationOutcome {
         mutated: changed,
         field,
@@ -107,16 +110,14 @@ pub fn recombine(
         }
     }
 
-    // Recombination across different kinds produces a Mutant. Same-kind
-    // parents preserve the kind so cluster/lineage attribution stays clean.
-    let kind = if a.kind == b.kind {
-        a.kind
-    } else {
-        MemeKind::Mutant
-    };
     let trigger = pick(rng, a.trigger, b.trigger);
     let target = pick(rng, a.target, b.target);
     let effect = pick(rng, a.effect, b.effect);
+    // Kind follows behavior: a recombinant that ends up Sharing is cooperative,
+    // one that ends up Attacking is aggressive. This re-subjects hybrids to
+    // conflict resolution instead of letting them hide in a conflict-exempt
+    // Mutant bucket. (Computed after `effect` so the RNG sequence is unchanged.)
+    let kind = MemeKind::from_effect(effect);
     let strength = if rng.gen_bool(0.5) {
         a.strength
     } else {

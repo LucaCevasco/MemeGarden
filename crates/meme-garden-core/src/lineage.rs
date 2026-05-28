@@ -67,6 +67,28 @@ impl LineageGraph {
         &self.nodes
     }
 
+    /// True if any node in this lineage's ancestry was born from a recombination.
+    /// Walks all parents (recombination nodes have two), so a hybrid that later
+    /// mutates still counts as a hybrid.
+    pub fn has_recombination_ancestor(&self, id: LineageId) -> bool {
+        // Iterative DFS with a visited guard; lineage is a DAG, not a tree.
+        let mut stack = vec![id];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            let Some(node) = self.get(current) else {
+                continue;
+            };
+            if node.origin == LineageOrigin::Recombination {
+                return true;
+            }
+            stack.extend(node.parents.iter().copied());
+        }
+        false
+    }
+
     /// Walk the parent chain (first parent only) until a Starter is reached.
     /// Returns the founding Starter's id, or None if the chain is malformed.
     pub fn trace_to_starter(&self, id: LineageId) -> Option<LineageId> {

@@ -53,6 +53,7 @@ fn single_starter_cfg(starter: &str) -> SimConfig {
         sharing: SharingConfig {
             share_threshold: 12.0,
             share_amount: 1.0,
+            recipient_multiplier: 1.0,
         },
         memes: MemePoolConfig {
             seed: vec![SeedMemeEntry {

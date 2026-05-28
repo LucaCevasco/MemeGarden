@@ -52,6 +52,7 @@ fn high_metabolism_cfg() -> SimConfig {
         sharing: SharingConfig {
             share_threshold: 100.0,
             share_amount: 0.0,
+            recipient_multiplier: 1.0,
         },
         memes: MemePoolConfig {
             seed: vec![SeedMemeEntry {

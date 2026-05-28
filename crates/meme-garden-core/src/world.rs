@@ -423,7 +423,9 @@ impl Simulation {
         let energy_per_food = self.config.food.energy_per_food;
         let attack_cost = self.config.attack.energy_cost_attacker;
         let attack_steal = self.config.attack.energy_steal;
+        let retaliation_chance = self.config.attack.retaliation_chance;
         let share_amount = self.config.sharing.share_amount;
+        let share_recipient_mult = self.config.sharing.recipient_multiplier;
         let inventory_cap = self.config.cognition.inventory_cap as usize;
 
         for i in 0..self.agents.len() {
@@ -488,11 +490,15 @@ impl Simulation {
                 Action::Share(target) => {
                     if let Some(j) = self.id_to_index(target) {
                         if self.agents[j].alive {
+                            // Positive-sum: donor pays `amount`, recipient gains
+                            // `amount * recipient_multiplier`. Energy is worth more
+                            // to a starving agent, so mutual aid creates net value.
                             let amount = share_amount.min(self.agents[i].energy);
                             let donor_id = self.agents[i].id;
                             self.agents[i].energy -= amount;
                             self.agents[j].energy =
-                                (self.agents[j].energy + amount).min(max_energy);
+                                (self.agents[j].energy + amount * share_recipient_mult)
+                                    .min(max_energy);
                             self.agents[j].adjust_trust(donor_id, 0.10);
                         }
                     }
@@ -519,6 +525,23 @@ impl Simulation {
                                     agent: dead,
                                     cause: DeathCause::Combat,
                                 });
+                            } else if self.rng.gen_bool(retaliation_chance) {
+                                // Survivor strikes back: `energy_steal` damage to the
+                                // attacker (a deterrent — energy is destroyed, not
+                                // transferred). Makes unprovoked predation risky.
+                                self.agents[i].energy =
+                                    (self.agents[i].energy - attack_steal).max(0.0);
+                                if self.agents[i].energy <= 0.0 {
+                                    self.agents[i].energy = 0.0;
+                                    self.agents[i].alive = false;
+                                    deaths += 1;
+                                    let dead = self.agents[i].id;
+                                    self.pending_events.push(Event::Death {
+                                        tick: self.tick,
+                                        agent: dead,
+                                        cause: DeathCause::Combat,
+                                    });
+                                }
                             }
                         }
                     }
@@ -851,13 +874,32 @@ impl Simulation {
                     self.tick,
                 );
                 let rid = recombined.id;
-                inherited_memes.push(rid);
-                self.agents[child_idx].inventory.push(recombined);
-                self.pending_events.push(Event::Recombination {
-                    tick: self.tick,
-                    parents: (a.id, b.id),
-                    child_meme: rid,
-                });
+                // Route through try_acquire: recombinants now carry a behavioral
+                // kind (coop/aggressive), so a hybrid can conflict with a meme the
+                // child already inherited. A direct push would break the
+                // no-two-conflicting-memes invariant.
+                match self.try_acquire(child_idx, recombined) {
+                    AcquireOutcome::Accepted | AcquireOutcome::Replaced { .. } => {
+                        inherited_memes.push(rid);
+                        self.pending_events.push(Event::Recombination {
+                            tick: self.tick,
+                            parents: (a.id, b.id),
+                            child_meme: rid,
+                        });
+                    }
+                    AcquireOutcome::Recombined {
+                        parents,
+                        child_meme_id,
+                    } => {
+                        inherited_memes.push(child_meme_id);
+                        self.pending_events.push(Event::Recombination {
+                            tick: self.tick,
+                            parents,
+                            child_meme: child_meme_id,
+                        });
+                    }
+                    AcquireOutcome::Skipped | AcquireOutcome::Rejected => {}
+                }
             }
 
             self.pending_events.push(Event::Birth {
@@ -932,6 +974,11 @@ impl Simulation {
         let mut carriers_by_kind = [0u32; 7];
         let mut meme_count = 0u32;
         let mut any_meme_carrier = false;
+        // Hybrids = memes with a recombinant ancestor. Tracked independently of
+        // kind because behavioral classification folds them into coop/aggressive.
+        let mut hybrid_carriers = 0u32;
+        let mut hybrid_meme_count = 0u32;
+        let mut hybrid_coop_meme_count = 0u32;
 
         for a in &self.agents {
             if !a.alive {
@@ -945,6 +992,7 @@ impl Simulation {
             }
             // Distinct kinds present in this agent's inventory.
             let mut seen = [false; 7];
+            let mut carries_hybrid = false;
             for m in &a.inventory {
                 meme_count += 1;
                 let idx = m.kind.idx();
@@ -952,11 +1000,32 @@ impl Simulation {
                     seen[idx] = true;
                     carriers_by_kind[idx] += 1;
                 }
+                if self.lineage.has_recombination_ancestor(m.lineage_id) {
+                    carries_hybrid = true;
+                    hybrid_meme_count += 1;
+                    if m.kind == crate::meme::MemeKind::Cooperative {
+                        hybrid_coop_meme_count += 1;
+                    }
+                }
+            }
+            if carries_hybrid {
+                hybrid_carriers += 1;
             }
             if !a.inventory.is_empty() {
                 any_meme_carrier = true;
             }
         }
+
+        let hybrid_prevalence = if alive == 0 {
+            0.0
+        } else {
+            hybrid_carriers as f32 / alive as f32
+        };
+        let hybrid_cooperative_fraction = if hybrid_meme_count == 0 {
+            0.0
+        } else {
+            hybrid_coop_meme_count as f32 / hybrid_meme_count as f32
+        };
 
         // Prevalence per kind = carriers / alive ∈ [0, 1].
         let mut prevalence = [0.0f32; 7];
@@ -988,6 +1057,8 @@ impl Simulation {
             population_by_trait: crate::metrics::PopulationByTrait::from_array(population_by_trait),
             meme_count,
             meme_prevalence_by_kind: crate::metrics::PrevalenceByKind::from_array(prevalence),
+            hybrid_prevalence,
+            hybrid_cooperative_fraction,
             diversity_shannon: diversity,
             dominance_top1_fraction: dominance,
             mean_energy,
@@ -1196,6 +1267,7 @@ mod tests {
             sharing: SharingConfig {
                 share_threshold: 12.0,
                 share_amount: 3.0,
+                recipient_multiplier: 1.0,
             },
             memes: MemePoolConfig {
                 seed: vec![

@@ -93,9 +93,14 @@ Mutation operates on exactly four fields: `trigger`, `target`, `effect`,
   `[0.0, 1.0]`.
 - `transmissibility`, `mutation_rate`, and `cognitive_cost` are held fixed.
 
-Mutation preserves `kind` so a mutated descendant still counts toward its
-founder's bucket in metrics. Recombination across *different* kinds produces
-a `MemeKind::Mutant`.
+`kind` tracks *behaviour*, not ancestry: it is derived from the meme's `effect`
+(`share → Cooperative`, `attack → Aggressive`, `move_away → Defensive`,
+`imitate → Imitative`, `increase_trust → Conformist`; effects with no clear
+valence fall back to `Mutant`). A mutation that swaps the `effect` field
+re-derives `kind`; trigger/target/strength changes leave it alone. A recombinant
+takes the `kind` implied by whichever parent's `effect` it inherits — so hybrids
+re-enter conflict resolution as cooperators or aggressors rather than hiding in a
+conflict-exempt `Mutant` bucket. `Mutant` is now only the rare no-valence fallback.
 
 ## The six starter memes
 
