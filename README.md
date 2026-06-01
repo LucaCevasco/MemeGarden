@@ -88,7 +88,7 @@ Inside the TUI: `space` to pause, `s` to single-step, `+` / `-` to speed up or d
 
 ---
 
-## Architecture at a glance
+## Architecture
 
 The project is two Rust crates. **Core is pure** — no terminal, no network, no filesystem writes. The **CLI** wraps it, owns I/O, and presents the TUI or the headless runner.
 
