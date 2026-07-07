@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgGroup, Parser, Subcommand};
-use meme_garden_core::{Metrics, SimConfig, Simulation};
+use meme_garden_core::{SimConfig, Simulation};
 
 const PRESET_DIR: &str = "configs/presets";
 
@@ -158,11 +158,12 @@ fn run_tui(
         writer.write_event(e)?;
     }
     let result = tui::run(&mut app);
-    // Persist whatever metrics the TUI accumulated.
+    // Persist whatever metrics the TUI accumulated. The TUI discards per-tick
+    // events as it runs, so — unlike headless — the JSONL holds only the header
+    // and one Tick record per retained metric, not the full birth/death/
+    // transmission stream. summary.csv is complete for the retained window.
     for m in &app.history {
         writer.write_summary_row(m)?;
-        // Re-create a Tick event so the JSONL has the same shape as headless.
-        // (This mirrors what runner::run_to_horizon emits.)
         writer.write_event(&meme_garden_core::Event::Tick(Box::new(m.clone())))?;
     }
     writer.finalize()?;
@@ -189,19 +190,18 @@ fn run_headless(
     let mut writer = export::RunWriter::create(&run_id, &cfg)
         .with_context(|| format!("creating run dir for {run_id}"))?;
     let mut sim = Simulation::new(cfg, seed);
-    runner::run_to_horizon(&mut sim, &mut writer, horizon, &run_id, None)?;
+    runner::run_to_horizon(&mut sim, &mut writer, horizon, &run_id)?;
     writer.finalize()?;
     eprintln!("wrote runs/{run_id}/");
     Ok(())
 }
 
 fn list_presets() -> Result<()> {
-    let dir = std::fs::read_dir(PRESET_DIR);
-    if dir.is_err() {
+    let Ok(read) = std::fs::read_dir(PRESET_DIR) else {
         println!("(no presets directory at {PRESET_DIR})");
         return Ok(());
-    }
-    let mut entries: Vec<_> = std::fs::read_dir(PRESET_DIR)?
+    };
+    let mut entries: Vec<_> = read
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "toml").unwrap_or(false))
         .collect();
@@ -245,10 +245,4 @@ fn analyze_cmd(run_dir: PathBuf) -> Result<()> {
 fn experiment_design(_prompt: String, _out: Option<PathBuf>) -> Result<()> {
     eprintln!("Error: ai provider not configured");
     std::process::exit(2);
-}
-
-#[allow(dead_code)]
-fn _unused_metrics_helpers() {
-    // Forces these to stay in the binary's public surface during refactors.
-    let _ = Metrics::csv_header;
 }

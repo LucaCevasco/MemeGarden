@@ -41,11 +41,11 @@ Populations here are small (tens of agents) and meme prevalence drifts, so any s
 
 | Scarcity | Cooperative wins | Aggressive wins | Total collapse | Mean population |
 |---|---|---|---|---|
-| low (food abundant) | **14 / 16** | 2 / 16 | 0 / 16 | ~71 |
-| mid (food halved)   | **11 / 16** | 5 / 16 | 0 / 16 | ~17 |
-| high (food at 20%)  | 3 / 16 | 3 / 16 | **10 / 16** | ~0 |
+| low (food abundant) | **11 / 16** | 5 / 16 | 0 / 16 | ~77 |
+| mid (food halved)   | 8 / 16 | 8 / 16 | 0 / 16 | ~23 |
+| high (food at 20%)  | 1 / 16 | 0 / 16 | **15 / 16** | ~0 |
 
-The answer: **cooperation is broadly viable.** Once predation carries real risk (an attacked agent fights back) and sharing is positive-sum (energy is worth more to a starving neighbour than to a full one), the cooperative meme usually wins under abundant and moderate food. Only under extreme scarcity does the outcome stop being about memes at all — the whole population starves before either side settles anything.
+The answer: **cooperation is broadly viable, but only while food is plentiful.** Once predation carries real risk (an attacked agent fights back) and sharing is positive-sum (energy is worth more to a starving neighbour than to a full one), the cooperative meme usually wins under abundant food. At moderate scarcity predation catches up and the outcome is contested — a coin-flip across seeds. Under extreme scarcity the outcome stops being about memes at all — the whole population starves before either side settles anything.
 
 The full per-tick event stream for any run is in `runs/<id>/events.jsonl` for anyone who wants to ask the data different questions.
 
@@ -62,7 +62,7 @@ The simulator runs the full life-cycle described above and writes everything to 
 - **A headless mode** that produces byte-identical output to the TUI for the same seed.
 - **A self-describing run artifact**: every run writes its resolved config, a JSON-Lines event stream, and a flat CSV summary, all under `runs/<timestamp>-<name>/`.
 
-The whole thing has **51 tests**, runs **1000 ticks in under a second** in release mode, and is **bit-identical** across reruns with the same seed. The constitution that keeps it that way lives at [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
+The whole thing has **49 tests**, runs **1000 ticks in under a second** in release mode, and is **bit-identical** across reruns with the same seed. The constitution that keeps it that way lives at [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
 
 ---
 
@@ -323,7 +323,7 @@ crates/
       starters.rs           six starter meme constructors + STARTERS table
       metrics.rs            Metrics + Event enum + shannon/top1 helpers
       ai.rs                 MemeNamer / ExperimentDesigner / RunAnalyst + NoopProvider
-    tests/                  9 integration test files
+    tests/                  10 integration test files
   meme-garden-cli/          binary: TUI + headless runner
     src/
       main.rs               clap subcommands (run | headless | list-presets | export | analyze | experiment)
@@ -331,7 +331,7 @@ crates/
       export.rs             RunWriter (JSONL + CSV + config.toml) + export helpers
       app.rs                TUI state (history ring + tps + pause)
       tui.rs                ratatui rendering (grid + sparkline)
-    tests/                  4 CLI integration test files (headless, sweep, export_roundtrip, list-presets)
+    tests/                  3 CLI integration test files (headless, sweep, export_roundtrip)
 configs/
   default.toml              baseline parameters
   presets/                  shipped milestone presets (low/mid/high scarcity)
@@ -350,11 +350,11 @@ Implemented in `crates/meme-garden-core/src/world.rs::Simulation::step`. Phase o
 
 1. **`perception_phase` (`world.rs`)** — for every agent, build a `Perception` struct (`policy.rs`): adjacent food cells, 4-cell-radius neighbors with classifications (trust, kin, shares-meme, high/low-energy), the `hungry` flag (`energy < 0.5 × starting_energy`), the `attacked_recently` flag (last attack within 10 ticks). Read-only.
 
-2. **`policy_phase` (`world.rs`)** — for each living agent in `AgentId` order, call `policy::compute_action`. The algorithm: start from an 8-slot baseline weight array (one slot per action category); multiply by trait modifiers (`Generous` × 1.4 on Share, `Cautious` × 0.6 on Attack, etc.); bias by hunger and adjacent food; gate reproduction by energy + age + partner; **for each meme whose `trigger` matches the perception, multiply the weight of `effect_to_category(meme.effect)` by `(1 + meme.strength)`**; zero out categories with no valid target (e.g. no adjacent hungry ally → Share weight 0). Sample via `SimRng`, then turn the category into a concrete `Action` by picking a target (e.g. `pick_share_target`, `pick_attack_target`).
+2. **`policy_phase` (`world.rs`)** — for each living agent in `AgentId` order, call `policy::compute_action`. The algorithm: start from a 6-slot baseline weight array (Move, Eat, Share, Attack, Imitate, Idle — transmission and reproduction are ambient, handled by their own phases, so they aren't sampled here); multiply by trait modifiers (`Generous` × 1.4 on Share, `Cautious` × 0.6 on Attack, etc.); bias by hunger and adjacent food; **for each meme whose `trigger` matches the perception, multiply the weight of `effect_to_category(meme.effect)` by `(1 + meme.strength)`**; zero out categories with no valid target (e.g. no adjacent hungry ally → Share weight 0). Sample via `SimRng`, then turn the category into a concrete `Action` by picking a target (e.g. `pick_share_target`, `pick_attack_target`).
 
 3. **`action_phase` (`world.rs`)** — apply each chosen `Action` in `AgentId` order. Decrements `energy` by `metabolism + Σ cognitive_cost`; emits `Event::Death { cause: Starvation }` on `energy ≤ 0`. `Share`, `Attack`, and `Imitate` mutate the relevant agents and the trust map. `Share` gives the recipient `share_amount × recipient_multiplier` while the donor pays `share_amount`. `Attack` steals `energy_steal`; if the victim survives, it strikes back with probability `retaliation_chance` for `energy_steal` damage to the attacker. `Imitate` inherits the target's first novel meme into the imitator's inventory (subject to `inventory_cap`; oldest gets evicted FIFO, emitting `MemeForgotten`).
 
-4. **`transmission_phase` (`world.rs`)** — independent from `Action::Transmit`; runs over all (agent, meme) pairs for every adjacent neighbor. Roll `p = base_rate × meme.transmissibility × recipient.social_copying_bias (+ prestige_boost if sender is top-quartile energy)` via `SimRng::gen_bool`. On success, allocate new `MemeId` + lineage node (`LineageOrigin::Inheritance`), then roll `meme.mutation_rate`; if it hits, call `mutation::mutate_in_place` and (on a real mutation) allocate a second lineage node (`LineageOrigin::Mutation`). A mutation that swaps the `effect` field re-derives the meme's `kind` from its new behaviour (`share → cooperative`, `attack → aggressive`). Apply `inventory_cap` and push. Emit `Event::Transmission` and (on mutation) `Event::Mutation`.
+4. **`transmission_phase` (`world.rs`)** — ambient, not driven by the sampled action; runs over all (agent, meme) pairs for every adjacent neighbor. Roll `p = base_rate × meme.transmissibility × recipient.social_copying_bias (+ prestige_boost if sender is top-quartile energy)` via `SimRng::gen_bool`. On success, allocate new `MemeId` + lineage node (`LineageOrigin::Inheritance`), then roll `meme.mutation_rate`; if it hits, call `mutation::mutate_in_place` and (on a real mutation) allocate a second lineage node (`LineageOrigin::Mutation`). A mutation that swaps the `effect` field re-derives the meme's `kind` from its new behaviour (`share → cooperative`, `attack → aggressive`). Apply `inventory_cap` and push. Emit `Event::Transmission` and (on mutation) `Event::Mutation`.
 
 5. **`reproduction_phase` (`world.rs`)** — iterate in `AgentId` order; for each agent meeting `energy ≥ reproduction.energy_threshold && age ≥ reproduction.min_age`, find an adjacent partner with the same energy precondition (i < j to avoid double counting). Both parents pay `offspring_energy_cost`. Offspring takes traits inherited from union of parents with `agents.trait_mutation_rate` per-trait reroll, social-copying-bias = average of parents, and memes inherited per parent at `reproduction.inherit_meme_prob` (each gets a fresh `MemeId` + `LineageOrigin::Inheritance` node). With 20% probability and a free inventory slot, fuse `parents[i].inventory[0]` and `parents[j].inventory[0]` via `mutation::recombine` (the child's `kind` is derived from its resulting `effect`, then routed through conflict resolution so it can't violate the no-two-conflicting-memes invariant) → `Event::Recombination`. Emit `Event::Birth`.
 
@@ -373,7 +373,7 @@ After phase 8, `tick += 1` and the next call to `step()` repeats.
 The contract has two tripwires:
 
 - `crates/meme-garden-core/src/world.rs::tests::same_seed_same_metrics` — paired `Simulation` instances with the same seed produce identical event JSON for 100 ticks.
-- `crates/meme-garden-core/tests/milestone.rs::milestone_direction_is_recorded` — the cooperative-vs-selfish experiment's *direction* of survival under low/mid/high scarcity is stable across re-runs. If the simulator changes shape, this fails and the milestone outcome has to be reconfirmed deliberately.
+- `crates/meme-garden-core/tests/milestone.rs::milestone_ensemble_direction_is_recorded` — the cooperative-vs-selfish experiment's *direction* of survival under low/mid/high scarcity is stable across re-runs. If the simulator changes shape, this fails and the milestone outcome has to be reconfirmed deliberately.
 
 ## Run artifacts
 
@@ -403,10 +403,10 @@ PRs that touch the simulator MUST address each principle in the description (eve
 cargo test --workspace
 ```
 
-47 tests across 13 files. The load-bearing ones:
+49 tests across 13 files. The load-bearing ones:
 
 - `world::tests::same_seed_same_metrics` — Principle I gate.
-- `crates/meme-garden-core/tests/milestone.rs::milestone_direction_is_recorded` — survival-direction regression.
+- `crates/meme-garden-core/tests/milestone.rs::milestone_ensemble_direction_is_recorded` — survival-direction regression.
 - `crates/meme-garden-core/tests/tui_headless_equivalence.rs::drain_cadence_does_not_affect_outputs` — proves the TUI cannot influence the metrics stream.
 - `crates/meme-garden-core/tests/lineage.rs::every_live_meme_traces_to_a_starter` — lineage closure invariant.
 - `crates/meme-garden-core/tests/mutation.rs::mutated_memes_stay_in_enum_ranges` — bounded-mutation invariant.

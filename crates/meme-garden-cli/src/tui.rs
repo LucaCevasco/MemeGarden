@@ -53,11 +53,7 @@ fn main_loop<B: ratatui::backend::Backend>(
                     KeyCode::Char(' ') => app.paused = !app.paused,
                     KeyCode::Char('+') | KeyCode::Char('=') => app.speed_up(),
                     KeyCode::Char('-') | KeyCode::Char('_') => app.slow_down(),
-                    KeyCode::Char('s') => {
-                        if app.paused {
-                            app.force_step();
-                        }
-                    }
+                    KeyCode::Char('s') if app.paused => app.force_step(),
                     _ => {}
                 }
             }

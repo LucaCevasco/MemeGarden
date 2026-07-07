@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentId;
-use crate::meme::{MemeId, MemeKind};
+use crate::meme::MemeId;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrevalenceByKind {
@@ -38,10 +38,6 @@ impl PrevalenceByKind {
             self.mutant,
         ]
     }
-
-    pub fn get(&self, kind: MemeKind) -> f32 {
-        self.as_array()[kind.idx()]
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,7 +59,12 @@ impl PopulationByTrait {
     }
 
     pub fn as_array(&self) -> [u32; 4] {
-        [self.generous, self.cautious, self.aggressive, self.conformist]
+        [
+            self.generous,
+            self.cautious,
+            self.aggressive,
+            self.conformist,
+        ]
     }
 }
 
@@ -260,11 +261,6 @@ impl Event {
             Event::ClusterSnapshot { .. } => "cluster_snapshot",
         }
     }
-}
-
-/// Index in the prevalence array for `kind` (so callers don't need to import the enum).
-pub fn prevalence_index(kind: MemeKind) -> usize {
-    kind.idx()
 }
 
 #[cfg(test)]

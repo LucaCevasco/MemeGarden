@@ -4,15 +4,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use meme_garden_core::{Event, Metrics, SimConfig};
-use serde::Deserialize;
 
 /// Writes the three artifacts for a single run:
 ///   * `config.toml`     — resolved configuration, self-describing.
 ///   * `events.jsonl`    — line-delimited Event records, header first.
 ///   * `summary.csv`     — flat per-tick aggregate, header first.
 pub struct RunWriter {
-    #[allow(dead_code)]
-    dir: PathBuf,
     events: BufWriter<File>,
     summary: BufWriter<File>,
     summary_header_written: bool,
@@ -42,16 +39,10 @@ impl RunWriter {
             .truncate(true)
             .open(dir.join("summary.csv"))?;
         Ok(Self {
-            dir,
             events: BufWriter::new(events),
             summary: BufWriter::new(summary),
             summary_header_written: false,
         })
-    }
-
-    #[allow(dead_code)]
-    pub fn dir(&self) -> &Path {
-        &self.dir
     }
 
     pub fn write_event(&mut self, event: &Event) -> Result<()> {
@@ -86,29 +77,10 @@ impl RunWriter {
 
 /// Read every Tick event in `events.jsonl` and rewrite `summary.csv` from them.
 pub fn regenerate_summary_csv(run_dir: &Path) -> Result<()> {
-    let f = File::open(run_dir.join("events.jsonl"))
-        .with_context(|| format!("opening {}/events.jsonl", run_dir.display()))?;
-    let reader = BufReader::new(f);
     let out = File::create(run_dir.join("summary.csv"))?;
     let mut w = BufWriter::new(out);
     writeln!(w, "{}", Metrics::csv_header())?;
-    for line in reader.lines() {
-        let line = line?;
-        if line.is_empty() {
-            continue;
-        }
-        // Only Tick records become summary rows.
-        let v: serde_json::Value = serde_json::from_str(&line)?;
-        if v.get("kind").and_then(|k| k.as_str()) != Some("tick") {
-            continue;
-        }
-        // The Tick variant is `Tick(Box<Metrics>)` with #[serde(tag="kind")] so
-        // the inner fields are inlined alongside "kind". Strip kind and decode.
-        let mut v = v;
-        if let Some(obj) = v.as_object_mut() {
-            obj.remove("kind");
-        }
-        let m: Metrics = serde_json::from_value(v)?;
+    for m in load_metrics_history(run_dir)? {
         writeln!(w, "{}", m.to_csv_row())?;
     }
     Ok(())
@@ -182,8 +154,12 @@ pub fn summarize_markdown(run_dir: &Path) -> Result<String> {
     Ok(s)
 }
 
+/// Decode every Tick record in `events.jsonl` back into `Metrics`. The Tick
+/// variant is `Tick(Box<Metrics>)` with `#[serde(tag="kind")]`, so its fields
+/// are inlined alongside `"kind"` — strip that tag before decoding.
 fn load_metrics_history(run_dir: &Path) -> Result<Vec<Metrics>> {
-    let f = File::open(run_dir.join("events.jsonl"))?;
+    let f = File::open(run_dir.join("events.jsonl"))
+        .with_context(|| format!("opening {}/events.jsonl", run_dir.display()))?;
     let reader = BufReader::new(f);
     let mut out = Vec::new();
     for line in reader.lines() {
@@ -191,25 +167,14 @@ fn load_metrics_history(run_dir: &Path) -> Result<Vec<Metrics>> {
         if line.is_empty() {
             continue;
         }
-        let v: serde_json::Value = serde_json::from_str(&line)?;
+        let mut v: serde_json::Value = serde_json::from_str(&line)?;
         if v.get("kind").and_then(|k| k.as_str()) != Some("tick") {
             continue;
         }
-        let mut v = v;
         if let Some(obj) = v.as_object_mut() {
             obj.remove("kind");
         }
-        let m: Metrics = serde_json::from_value(v)?;
-        out.push(m);
+        out.push(serde_json::from_value(v)?);
     }
     Ok(out)
-}
-
-/// Tiny helper kept here for the export-roundtrip integration test.
-#[derive(Deserialize)]
-#[allow(dead_code)]
-pub(crate) struct HeaderProbe {
-    pub kind: String,
-    pub schema_version: u32,
-    pub run_id: String,
 }

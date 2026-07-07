@@ -5,7 +5,7 @@
 use crate::action::{Action, Direction};
 use crate::agent::{Agent, AgentId, AgentTrait, Position};
 use crate::config::SimConfig;
-use crate::meme::{Effect, Meme, MemeId, TargetSelector, Trigger};
+use crate::meme::{Effect, Trigger};
 use crate::rng::SimRng;
 
 /// Snapshot of an agent's neighborhood, computed once per tick in the perception
@@ -46,8 +46,11 @@ pub fn compute_action(
     rng: &mut SimRng,
 ) -> Action {
     // 1) Build a coarse action category distribution. Categories are:
-    //    [Move, Eat, Share, Attack, Imitate, Transmit, Reproduce, Idle]
-    const N: usize = 8;
+    //    [Move, Eat, Share, Attack, Imitate, Idle]
+    // Transmission and reproduction are ambient — they run in their own phases
+    // for every eligible agent regardless of the sampled action, so they are not
+    // sampled here.
+    const N: usize = 6;
     let mut weights = [1.0_f32; N];
 
     // 2) Trait-based default biases.
@@ -75,20 +78,7 @@ pub fn compute_action(
         weights[0] *= 1.5; // Move (forage)
     }
 
-    // 4) Reproduction bias when energy is high and a partner is adjacent.
-    if agent.energy >= cfg.reproduction.energy_threshold
-        && agent.age >= cfg.reproduction.min_age
-        && perception.neighbors.iter().any(|n| {
-            adjacent(perception.position, n.position)
-                && n.energy >= cfg.reproduction.energy_threshold
-        })
-    {
-        weights[6] *= 4.0;
-    } else {
-        weights[6] = 0.0; // not eligible
-    }
-
-    // 5) Meme-driven biases. Each meme whose trigger matches multiplies the
+    // 4) Meme-driven biases. Each meme whose trigger matches multiplies the
     //    weight of the action category corresponding to its effect.
     for meme in &agent.inventory {
         if !trigger_matches(meme.trigger, perception) {
@@ -100,7 +90,7 @@ pub fn compute_action(
         weights[cat] *= 1.0 + meme.strength.clamp(0.0, 1.0);
     }
 
-    // 6) Disable categories that have no valid target.
+    // 5) Disable categories that have no valid target.
     if perception.adjacent_food.is_empty() {
         weights[1] = 0.0; // Eat
     }
@@ -116,19 +106,15 @@ pub fn compute_action(
     }
     if perception.neighbors.is_empty() {
         weights[4] = 0.0; // Imitate
-        weights[5] = 0.0; // Transmit
-    }
-    if agent.inventory.is_empty() {
-        weights[5] = 0.0; // Transmit (nothing to transmit)
     }
 
-    // 7) Sample a category.
+    // 6) Sample a category.
     let total: f32 = weights.iter().sum();
     if total <= 0.0 {
         return Action::Idle;
     }
     let mut r = (rng.gen_u32() as f32 / u32::MAX as f32) * total;
-    let mut category = 7; // default Idle
+    let mut category = 5; // default Idle
     for (i, w) in weights.iter().enumerate() {
         if r < *w {
             category = i;
@@ -137,7 +123,7 @@ pub fn compute_action(
         r -= *w;
     }
 
-    // 8) Translate category to a concrete Action by picking a target where needed.
+    // 7) Translate category to a concrete Action by picking a target where needed.
     match category {
         0 => sample_move(perception, agent, rng),
         1 => Action::Eat,
@@ -151,14 +137,6 @@ pub fn compute_action(
         },
         4 => match pick_imitate_target(perception) {
             Some(t) => Action::Imitate(t),
-            None => Action::Idle,
-        },
-        5 => match pick_transmit_target(perception, agent, rng) {
-            Some((t, m)) => Action::Transmit(t, m),
-            None => Action::Idle,
-        },
-        6 => match pick_reproduce_partner(perception, agent, cfg) {
-            Some(t) => Action::Reproduce(t),
             None => Action::Idle,
         },
         _ => Action::Idle,
@@ -188,8 +166,9 @@ fn effect_to_category(effect: Effect) -> usize {
         Effect::Share | Effect::IncreaseTrust => 2,
         Effect::Attack | Effect::DecreaseTrust => 3,
         Effect::Imitate => 4,
-        Effect::TransmitMeme => 5,
-        Effect::RefuseInteraction => 7,
+        // TransmitMeme/RefuseInteraction have no sampled action category; they
+        // fall through to Idle (category 5).
+        Effect::TransmitMeme | Effect::RefuseInteraction => 5,
     }
 }
 
@@ -260,31 +239,6 @@ fn pick_imitate_target(p: &Perception) -> Option<AgentId> {
         .map(|n| n.id)
 }
 
-fn pick_transmit_target(
-    p: &Perception,
-    agent: &Agent,
-    rng: &mut SimRng,
-) -> Option<(AgentId, MemeId)> {
-    let nbr = p
-        .neighbors
-        .iter()
-        .find(|n| adjacent(p.position, n.position))?;
-    let meme: &Meme = agent.inventory.first()?;
-    let _ = rng; // selecting first inventory entry is deterministic; rng would only matter if we sampled
-    Some((nbr.id, meme.id))
-}
-
-fn pick_reproduce_partner(p: &Perception, agent: &Agent, cfg: &SimConfig) -> Option<AgentId> {
-    p.neighbors
-        .iter()
-        .find(|n| {
-            adjacent(p.position, n.position)
-                && n.energy >= cfg.reproduction.energy_threshold
-                && agent.energy >= cfg.reproduction.energy_threshold
-        })
-        .map(|n| n.id)
-}
-
 fn any_neighbor_satisfying(
     neighbors: &[NeighborInfo],
     _pos: Position,
@@ -298,25 +252,4 @@ pub fn adjacent(a: Position, b: Position) -> bool {
     let dx = (a.x - b.x).abs();
     let dy = (a.y - b.y).abs();
     dx + dy == 1
-}
-
-/// Resolve a `TargetSelector` against a perception, returning the chosen
-/// neighbor's id if one matches. Used by the transmission phase.
-pub fn select_target(selector: TargetSelector, p: &Perception, _agent: &Agent) -> Option<AgentId> {
-    match selector {
-        TargetSelector::Self_ => Some(p.agent_id),
-        TargetSelector::Kin => p.neighbors.iter().find(|n| n.is_kin).map(|n| n.id),
-        TargetSelector::Ally => p
-            .neighbors
-            .iter()
-            .find(|n| n.trust >= 0.0 && adjacent(p.position, n.position))
-            .map(|n| n.id),
-        TargetSelector::Stranger => p
-            .neighbors
-            .iter()
-            .find(|n| n.trust < 0.0 && adjacent(p.position, n.position))
-            .map(|n| n.id),
-        TargetSelector::HighEnergyAgent => p.neighbors.iter().find(|n| n.high_energy).map(|n| n.id),
-        TargetSelector::LowEnergyAgent => p.neighbors.iter().find(|n| n.low_energy).map(|n| n.id),
-    }
 }

@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use meme_garden_core::{Event, Simulation};
+use meme_garden_core::Simulation;
 
 use crate::export::RunWriter;
 
@@ -69,19 +69,6 @@ fn is_leap(y: u32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
-/// Observer hook invoked once per tick. Allows the TUI to mirror state without
-/// owning the tick loop. Returning `Quit` ends the run cleanly.
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
-pub enum ObserverDirective {
-    Continue,
-    Quit,
-}
-
-pub trait Observer {
-    fn on_tick(&mut self, sim: &Simulation, events: &[Event]) -> ObserverDirective;
-}
-
 /// Run the simulation through `horizon` ticks, emitting a Header event first,
 /// then writing every emitted event and per-tick summary row to `writer`.
 pub fn run_to_horizon(
@@ -89,7 +76,6 @@ pub fn run_to_horizon(
     writer: &mut RunWriter,
     horizon: u32,
     run_id: &str,
-    mut observer: Option<&mut dyn Observer>,
 ) -> Result<()> {
     sim.emit_header(run_id.to_string());
     for e in &sim.events_drain() {
@@ -106,11 +92,6 @@ pub fn run_to_horizon(
             writer.write_event(e)?;
         }
         writer.write_summary_row(&m)?;
-        if let Some(obs) = observer.as_deref_mut() {
-            if matches!(obs.on_tick(sim, &events), ObserverDirective::Quit) {
-                break;
-            }
-        }
         // Stop-on-extinction short circuit.
         if sim.config().run.stop_on_extinction && m.alive == 0 {
             break;

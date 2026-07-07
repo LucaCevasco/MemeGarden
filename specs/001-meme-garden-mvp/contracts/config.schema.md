@@ -4,7 +4,7 @@ Every run is parameterized by a TOML file deserialized into `SimConfig`. The sch
 below is the public contract: any field rename, removal, or type change is a breaking
 change.
 
-Defaults shown are the values shipped in `configs/default.toml` (post-MVP-extension).
+Values shown mirror those shipped in `configs/default.toml` (post-MVP-extension).
 
 ```toml
 [world]
@@ -31,7 +31,7 @@ energy_per_food   = 9.0     # f32, > 0
 # A scalar "preset" knob. The runner reads this and applies a transform to
 # food.initial_density and food.regrowth_rate at load time, then drops scarcity
 # from the resolved config copy. low = 1.0 baseline; mid = 0.5x; high = 0.2x.
-level = "low"               # "low" | "mid" | "high" | "custom"
+level = "custom"            # "low" | "mid" | "high" | "custom"
 
 [cognition]
 inventory_cap = 8           # u32, max memes per agent; > 0
@@ -45,6 +45,10 @@ prestige_boost           = 0.10  # f32, additive bonus when carrier energy is to
 [mutation]
 strength_jitter_max   = 0.10  # f32, ≥ 0; max single-step Δ on strength
 enum_swap_probability = 0.20  # f32 in [0,1]; per-mutation chance to swap an enum field
+
+[conflict]
+recombine_share = 0.20  # f32 in [0,1]; fraction of contested acquires that recombine
+                        # the two conflicting memes instead of reject/replace
 
 [reproduction]
 energy_threshold       = 40.0  # f32; both parents must be ≥ this
@@ -60,7 +64,8 @@ retaliation_chance   = 0.5     # f32 in [0,1]
 [sharing]
 share_threshold        = 22.0  # f32; default policy only shares if energy ≥ this
 share_amount           = 2.0   # f32, > 0
-share_target           = "low_energy_ally"   # "low_energy_ally" | "kin"
+recipient_multiplier   = 1.0   # f32, ≥ 0 (optional, default 1.0); recipient gains
+                               # share_amount * this. > 1.0 makes sharing positive-sum.
 
 [memes]
 # Initial meme population. Each entry instantiates a starter meme with the given
@@ -68,8 +73,7 @@ share_target           = "low_energy_ally"   # "low_energy_ally" | "kin"
 #   share_with_allies | avoid_strangers | copy_high_energy | attack_low_energy_outsiders
 #   | punish_non_sharers | prefer_same_meme
 seed = [
-    { name = "share_with_allies",          carrier_fraction = 0.5 },
-    { name = "attack_low_energy_outsiders", carrier_fraction = 0.5 },
+    { name = "share_with_allies", carrier_fraction = 0.10 },
 ]
 
 [run]
@@ -85,10 +89,9 @@ survival_threshold        = 0.05    # f32 in [0,1]; meme "survives" if end preva
 
 - All probabilities are in `[0.0, 1.0]`. Validation rejects values outside that range
   with a typed `ConfigError::OutOfRange`.
-- `agents.count` must be > 0 and `≤ world.width * world.height` (each agent starts on a
-  cell, but multiple agents per cell are allowed; the check guards against absurd
-  values).
-- `initial_traits_dist` must sum to 1.0 ± 1e-6.
+- `agents.count` must be > 0. Multiple agents may share a cell, so there is no
+  `count ≤ width * height` constraint.
+- `initial_traits_dist` must sum to 1.0 ± 1e-3.
 - `memes.seed[*].name` must be one of the documented starter names; unknown names
   produce `ConfigError::UnknownStarterMeme`.
 - `scarcity.level == "custom"` means `food.*` is used as-is; otherwise the runner

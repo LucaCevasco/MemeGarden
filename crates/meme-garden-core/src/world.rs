@@ -59,14 +59,7 @@ enum AcquireOutcome {
     Accepted,
     Skipped,
     Rejected,
-    // why: fields are informational — used by tests/asserts and the JSONL
-    // event emission downstream. `dead_code` allow is intentional; do not
-    // collapse to unit variants.
-    #[allow(dead_code)]
-    Replaced {
-        old_meme_id: MemeId,
-        new_meme_id: MemeId,
-    },
+    Replaced,
     Recombined {
         parents: (MemeId, MemeId),
         child_meme_id: MemeId,
@@ -267,10 +260,7 @@ impl Simulation {
                     old: old.id,
                     new: new_id,
                 });
-                AcquireOutcome::Replaced {
-                    old_meme_id: old.id,
-                    new_meme_id: new_id,
-                }
+                AcquireOutcome::Replaced
             } else {
                 AcquireOutcome::Rejected
             }
@@ -296,11 +286,8 @@ impl Simulation {
     pub fn step(&mut self) -> Metrics {
         let perceptions = self.perception_phase();
         let actions = self.policy_phase(&perceptions);
-        let (mut transmissions, mut mutations, mut deaths) =
-            self.action_phase(&perceptions, &actions);
-        let (extra_t, extra_m) = self.transmission_phase(&perceptions);
-        transmissions += extra_t;
-        mutations += extra_m;
+        let mut deaths = self.action_phase(&perceptions, &actions);
+        let (transmissions, mutations) = self.transmission_phase();
         let births = self.reproduction_phase(&perceptions);
         deaths += self.death_phase();
         self.world_maintenance_phase();
@@ -407,16 +394,13 @@ impl Simulation {
         out
     }
 
-    /// Executes actions. Reproduction (Action::Reproduce) is collected and applied
-    /// inside `reproduction_phase` to keep the action_phase free of agent
-    /// allocation. Transmission via the Action surface is folded into the
-    /// dedicated `transmission_phase` for clarity.
+    /// Executes movement, eating, sharing, attacking, and imitation. Reproduction
+    /// and transmission are ambient and handled by their own phases, so they are
+    /// not driven by `actions` here.
     ///
-    /// Returns (transmissions_count, mutations_count, deaths_count) attributable
-    /// to actions in this phase.
-    fn action_phase(&mut self, perceptions: &[Perception], actions: &[Action]) -> (u32, u32, u32) {
-        let mut transmissions = 0;
-        let mut mutations = 0;
+    /// Returns the number of deaths attributable to this phase (starvation and
+    /// combat).
+    fn action_phase(&mut self, perceptions: &[Perception], actions: &[Action]) -> u32 {
         let mut deaths = 0;
         let metabolism = self.config.agents.metabolism;
         let max_energy = self.config.agents.max_energy;
@@ -426,7 +410,6 @@ impl Simulation {
         let retaliation_chance = self.config.attack.retaliation_chance;
         let share_amount = self.config.sharing.share_amount;
         let share_recipient_mult = self.config.sharing.recipient_multiplier;
-        let inventory_cap = self.config.cognition.inventory_cap as usize;
 
         for i in 0..self.agents.len() {
             if !self.agents[i].alive {
@@ -496,9 +479,9 @@ impl Simulation {
                             let amount = share_amount.min(self.agents[i].energy);
                             let donor_id = self.agents[i].id;
                             self.agents[i].energy -= amount;
-                            self.agents[j].energy =
-                                (self.agents[j].energy + amount * share_recipient_mult)
-                                    .min(max_energy);
+                            self.agents[j].energy = (self.agents[j].energy
+                                + amount * share_recipient_mult)
+                                .min(max_energy);
                             self.agents[j].adjust_trust(donor_id, 0.10);
                         }
                     }
@@ -574,33 +557,20 @@ impl Simulation {
                             }
                         }
                     }
-                    let _ = inventory_cap; // suppress unused-binding warning
-                }
-                Action::Transmit(_, _) => {
-                    // Transmission is the dedicated phase's responsibility; the
-                    // policy may have emitted Transmit but we leave the actual
-                    // bookkeeping to `transmission_phase`. This keeps Event
-                    // attribution clean.
-                    let _ = (&mut transmissions, &mut mutations);
-                }
-                Action::Reproduce(_) => {
-                    // Reproduction is collected by reproduction_phase reading
-                    // perceptions + agent state directly.
                 }
                 Action::Idle => {}
             }
         }
 
-        (transmissions, mutations, deaths)
+        deaths
     }
 
     /// Returns (transmissions_count, mutations_count) attributable to this phase.
-    fn transmission_phase(&mut self, perceptions: &[Perception]) -> (u32, u32) {
+    fn transmission_phase(&mut self) -> (u32, u32) {
         let mut transmissions = 0;
         let mut mutations = 0;
         let base_rate = self.config.transmission.base_rate;
         let prestige_boost = self.config.transmission.prestige_boost;
-        let inventory_cap = self.config.cognition.inventory_cap as usize;
 
         for i in 0..self.agents.len() {
             if !self.agents[i].alive || self.agents[i].inventory.is_empty() {
@@ -625,8 +595,6 @@ impl Simulation {
                     })
                     .map(|(j, b)| (j, b.id))
                     .collect();
-                let _ = perceptions;
-                let _ = i_id;
 
                 for (j, _nid) in neighbors {
                     // Same-kind dup is rejected later by try_acquire (Skipped);
@@ -688,7 +656,7 @@ impl Simulation {
                     let new_meme_id = child.id;
                     let outcome = self.try_acquire(j, child);
                     match outcome {
-                        AcquireOutcome::Accepted | AcquireOutcome::Replaced { .. } => {
+                        AcquireOutcome::Accepted | AcquireOutcome::Replaced => {
                             self.pending_events.push(Event::Transmission {
                                 tick: self.tick,
                                 from: i_id,
@@ -714,7 +682,6 @@ impl Simulation {
                         AcquireOutcome::Rejected | AcquireOutcome::Skipped => {}
                     }
                 }
-                let _ = inventory_cap; // suppress unused-binding warning
             }
         }
         (transmissions, mutations)
@@ -833,10 +800,7 @@ impl Simulation {
                         );
                         let acquired_id = cm.id;
                         let outcome = self.try_acquire(child_idx, cm);
-                        if matches!(
-                            outcome,
-                            AcquireOutcome::Accepted | AcquireOutcome::Replaced { .. }
-                        ) {
+                        if matches!(outcome, AcquireOutcome::Accepted | AcquireOutcome::Replaced) {
                             inherited_memes.push(acquired_id);
                         }
                         if let AcquireOutcome::Recombined {
@@ -879,7 +843,7 @@ impl Simulation {
                 // child already inherited. A direct push would break the
                 // no-two-conflicting-memes invariant.
                 match self.try_acquire(child_idx, recombined) {
-                    AcquireOutcome::Accepted | AcquireOutcome::Replaced { .. } => {
+                    AcquireOutcome::Accepted | AcquireOutcome::Replaced => {
                         inherited_memes.push(rid);
                         self.pending_events.push(Event::Recombination {
                             tick: self.tick,
@@ -1207,12 +1171,6 @@ fn sample_trait(dist: &[f32; 4], rng: &mut SimRng) -> AgentTrait {
     AgentTrait::ALL[AgentTrait::ALL.len() - 1]
 }
 
-// Backwards-compat: keep `is_adjacent` exposed for any external users (it's
-// re-implemented as `crate::policy::adjacent`).
-pub fn is_adjacent(a: Position, b: Position) -> bool {
-    crate::policy::adjacent(a, b)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1252,7 +1210,9 @@ mod tests {
                 strength_jitter_max: 0.1,
                 enum_swap_probability: 0.2,
             },
-            conflict: ConflictConfig { recombine_share: 0.20 },
+            conflict: ConflictConfig {
+                recombine_share: 0.20,
+            },
             reproduction: ReproductionConfig {
                 energy_threshold: 35.0,
                 offspring_energy_cost: 10.0,
@@ -1309,7 +1269,11 @@ mod tests {
         }
         // And the seeding should actually seed *something* under the shipped
         // 0.5 + 0.5 pool — otherwise the milestone has nothing to spread.
-        let carriers = sim.agents.iter().filter(|a| !a.inventory.is_empty()).count();
+        let carriers = sim
+            .agents
+            .iter()
+            .filter(|a| !a.inventory.is_empty())
+            .count();
         assert!(carriers > 0, "no agents seeded with any starter meme");
     }
 

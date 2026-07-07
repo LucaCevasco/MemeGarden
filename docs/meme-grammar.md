@@ -80,7 +80,7 @@ The sample is drawn from `SimRng` (the only randomness source).
 - **Measurability**: prevalence, transmission rate, mutation events, lineage
   trees — all trivially computed from the struct fields.
 - **Cost**: no model calls in the hot loop means a 1000-tick run completes
-  in under 30 seconds on a developer laptop.
+  in well under a second on a developer laptop.
 
 ## How mutation works (and what it does NOT do)
 

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentId;
-use crate::meme::MemeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,8 +36,6 @@ pub enum Action {
     Share(AgentId),
     Attack(AgentId),
     Imitate(AgentId),
-    Transmit(AgentId, MemeId),
-    Reproduce(AgentId),
     #[default]
     Idle,
 }

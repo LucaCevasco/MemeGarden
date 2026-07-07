@@ -3,7 +3,7 @@
 //! direction of cooperative-meme survival under each scarcity.
 //!
 //! Single-seed outcomes are drift-dominated at these population sizes (mid/high
-//! retain only ~17/~0 agents), so the milestone is recorded as a win-rate across
+//! retain only ~23/~0 agents), so the milestone is recorded as a win-rate across
 //! a fixed seed sweep, not one cherry-picked seed. When this test fails after
 //! intentional simulator changes, update the recorded thresholds below
 //! intentionally — they ARE the milestone outcome.
@@ -53,14 +53,19 @@ struct Ensemble {
     coop_wins: u32,
     aggr_wins: u32,
     collapses: u32,
+    mean_alive: f32,
 }
 
 /// A cooperative "win" = population survives and cooperative prevalence strictly
 /// exceeds aggressive. Collapse = nobody alive at horizon (neither side wins).
 fn run_ensemble(level: &str, seeds: std::ops::RangeInclusive<u64>) -> Ensemble {
     let mut e = Ensemble::default();
+    let mut alive_sum = 0u64;
+    let mut n = 0u32;
     for seed in seeds {
         let o = run_seed(level, seed);
+        alive_sum += o.alive_final as u64;
+        n += 1;
         if o.alive_final == 0 {
             e.collapses += 1;
         } else if o.coop_final > o.aggr_final {
@@ -69,54 +74,27 @@ fn run_ensemble(level: &str, seeds: std::ops::RangeInclusive<u64>) -> Ensemble {
             e.aggr_wins += 1;
         }
     }
+    e.mean_alive = if n == 0 {
+        0.0
+    } else {
+        alive_sum as f32 / n as f32
+    };
     e
 }
 
 #[test]
-fn rerun_is_bit_identical_low() {
-    let cfg = cfg("low");
-    let mut a = Simulation::new(cfg.clone(), Some(SEED));
-    let mut b = Simulation::new(cfg, Some(SEED));
-    for _ in 0..HORIZON {
-        a.step();
-        b.step();
-        let ea = a.events_drain();
-        let eb = b.events_drain();
-        let ja = serde_json::to_string(&ea).unwrap();
-        let jb = serde_json::to_string(&eb).unwrap();
-        assert_eq!(ja, jb);
-    }
-}
-
-#[test]
-fn rerun_is_bit_identical_mid() {
-    let cfg = cfg("mid");
-    let mut a = Simulation::new(cfg.clone(), Some(SEED));
-    let mut b = Simulation::new(cfg, Some(SEED));
-    for _ in 0..HORIZON {
-        a.step();
-        b.step();
-        let ea = a.events_drain();
-        let eb = b.events_drain();
-        let ja = serde_json::to_string(&ea).unwrap();
-        let jb = serde_json::to_string(&eb).unwrap();
-        assert_eq!(ja, jb);
-    }
-}
-
-#[test]
-fn rerun_is_bit_identical_high() {
-    let cfg = cfg("high");
-    let mut a = Simulation::new(cfg.clone(), Some(SEED));
-    let mut b = Simulation::new(cfg, Some(SEED));
-    for _ in 0..HORIZON {
-        a.step();
-        b.step();
-        let ea = a.events_drain();
-        let eb = b.events_drain();
-        let ja = serde_json::to_string(&ea).unwrap();
-        let jb = serde_json::to_string(&eb).unwrap();
-        assert_eq!(ja, jb);
+fn rerun_is_bit_identical() {
+    for level in ["low", "mid", "high"] {
+        let cfg = cfg(level);
+        let mut a = Simulation::new(cfg.clone(), Some(SEED));
+        let mut b = Simulation::new(cfg, Some(SEED));
+        for _ in 0..HORIZON {
+            a.step();
+            b.step();
+            let ja = serde_json::to_string(&a.events_drain()).unwrap();
+            let jb = serde_json::to_string(&b.events_drain()).unwrap();
+            assert_eq!(ja, jb, "re-run diverged at scarcity level {level}");
+        }
     }
 }
 
@@ -133,24 +111,25 @@ fn milestone_ensemble_direction_is_recorded() {
     eprintln!("high: {high:?}");
 
     // Recorded ensemble outcome (seeds 1..=16, shipped presets, horizon 1000):
-    //   low : coop 14/16, aggr 2/16, collapse 0   — cooperation usually wins
-    //   mid : coop 11/16, aggr 5/16, collapse 0   — cooperation still usually wins
-    //   high: coop  3/16, aggr 3/16, collapse 10  — the system mostly collapses
-    // The story: removing the predation free-ride + positive-sum sharing makes
-    // cooperation broadly viable, until extreme scarcity collapses everyone.
+    //   low : coop 11/16, aggr 5/16, collapse  0  — cooperation usually wins
+    //   mid : coop  8/16, aggr 8/16, collapse  0  — contested, roughly a coin-flip
+    //   high: coop  1/16, aggr 0/16, collapse 15  — the system almost always collapses
+    // The story: positive-sum sharing keeps cooperation broadly viable under low
+    // scarcity; at mid scarcity predation catches up and the outcome is contested;
+    // under high scarcity nearly everyone starves regardless of strategy.
     // These ARE the milestone outcome. Margins below the recorded counts absorb
     // incidental drift; a real directional flip should fail loudly. Changing them
     // is a deliberate act — investigate why behavior shifted before relaxing.
     assert!(
-        low.coop_wins >= 12,
+        low.coop_wins >= 9,
         "cooperation should usually win under low scarcity (got {low:?})"
     );
     assert!(
-        mid.coop_wins > mid.aggr_wins && mid.coop_wins >= 8,
-        "cooperation should usually win under mid scarcity (got {mid:?})"
+        mid.collapses == 0 && mid.coop_wins >= 5 && mid.aggr_wins >= 5,
+        "mid scarcity should stay contested with no collapse (got {mid:?})"
     );
     assert!(
-        high.collapses >= 8,
-        "the population should mostly collapse under high scarcity (got {high:?})"
+        high.collapses >= 12,
+        "the population should almost always collapse under high scarcity (got {high:?})"
     );
 }

@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use meme_garden_core::{Metrics, Simulation};
 
-/// Maximum number of past metrics retained for the sparkline pane.
+/// Soft cap on retained metrics for the sparkline pane. History is trimmed back
+/// to this length once it grows past 2× (amortizes the `drain` shifts).
 const HISTORY_RING_CAP: usize = 2048;
 
 pub struct App {
@@ -36,20 +37,25 @@ impl App {
         }
         let interval = Duration::from_secs_f32(1.0 / self.tps);
         while self.last_tick_at.elapsed() >= interval {
-            let m = self.sim.step();
-            let _ = self.sim.events_drain();
-            self.history.push(m);
+            self.step_once();
             self.last_tick_at += interval;
-            if self.history.len() > HISTORY_RING_CAP * 2 {
-                self.history.drain(0..self.history.len() - HISTORY_RING_CAP);
-            }
         }
     }
 
     pub fn force_step(&mut self) {
+        self.step_once();
+    }
+
+    /// Advance one tick, discard its events (the TUI writes no artifacts), and
+    /// record the metrics, trimming the history back to the ring cap when it
+    /// grows past 2×.
+    fn step_once(&mut self) {
         let m = self.sim.step();
         let _ = self.sim.events_drain();
         self.history.push(m);
+        if self.history.len() > HISTORY_RING_CAP * 2 {
+            self.history.drain(0..self.history.len() - HISTORY_RING_CAP);
+        }
     }
 
     pub fn last_metrics(&self) -> Option<&Metrics> {
